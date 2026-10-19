@@ -166,8 +166,12 @@ export const tocApply = z.object({
 export const expandVolumeRequest = z.object({
   volumeId: z.string().optional(),
   volumeTitle: z.string().max(200).optional(),
+  /** 卷概要，新建卷时可以顺带写入 */
+  volumeSummary: z.string().max(4000).optional(),
   chapterCount: z.number().int().min(1).max(300).optional(),
   instruction: z.string().max(2000).optional(),
+  /** 只生成章节名，不写大纲 */
+  titlesOnly: z.boolean().optional(),
 });
 
 /** 把某卷的章节写入作品 */
@@ -184,6 +188,15 @@ export const applyVolumeChapters = z.object({
     )
     .min(1, '至少需要一章')
     .max(300),
+});
+
+/** 对大纲/细纲提问或整改 */
+export const planReviseInput = z.object({
+  projectId: z.string().min(1),
+  chapterId: z.string().min(1),
+  field: z.enum(['outline', 'beats']),
+  mode: z.enum(['ask', 'revise']),
+  instruction: z.string().min(1).max(4000),
 });
 
 /** 一套模型配置 */

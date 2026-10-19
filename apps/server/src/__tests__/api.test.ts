@@ -619,6 +619,69 @@ describe('AI 生成目录（已有作品）', () => {
   });
 });
 
+describe('大纲/细纲提问与整改', () => {
+  let projectId = '';
+  let chapterId = '';
+
+  before(async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '整改测试' })).body);
+    projectId = p.id;
+    const c = JSON.parse(
+      (
+        await post(`/api/projects/${projectId}/chapters`, {
+          title: '第1章 · 开端',
+          outline: '主角被逐出家门',
+        })
+      ).body,
+    );
+    chapterId = c.id;
+  });
+
+  test('未配置模型时返回 412', async () => {
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '整改无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+    const res = await post('/api/ai/revise-plan', {
+      projectId,
+      chapterId,
+      field: 'outline',
+      mode: 'revise',
+      instruction: '改得更紧张',
+    });
+    assert.equal(res.statusCode, 412);
+  });
+
+  test('参数不合法被拒绝', async () => {
+    const res = await post('/api/ai/revise-plan', {
+      projectId,
+      chapterId,
+      field: 'bad',
+      mode: 'revise',
+      instruction: 'x',
+    });
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('章节不存在返回 404', async () => {
+    const res = await post('/api/ai/revise-plan', {
+      projectId,
+      chapterId: 'nope',
+      field: 'outline',
+      mode: 'ask',
+      instruction: '这章合理吗',
+    });
+    assert.equal(res.statusCode, 404);
+  });
+});
+
 describe('章节批量操作', () => {
   let projectId = '';
   let volumeId = '';

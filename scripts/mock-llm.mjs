@@ -122,7 +122,9 @@ const server = http.createServer((req, res) => {
       const isBatchRequest = /编写章节大纲/.test(system?.content ?? '');
       // 一致性检查
       const isCheckRequest = /检查长篇连载/.test(system?.content ?? '');
-      // 分层创作：大纲→细纲、细纲→场景卡
+      // 大纲/细纲：提问与整改
+      const isPlanAsk = /正在和作者讨论一本书的章节规划/.test(system?.content ?? '');
+      const isPlanRevise = /按作者要求修改/.test(system?.content ?? '');
       const isBeatsRequest = /小说结构编辑/.test(system?.content ?? '');
       const isScenesRequest = /小说场景设计师/.test(system?.content ?? '');
       const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
@@ -138,7 +140,16 @@ const server = http.createServer((req, res) => {
       );
 
       let content = SAMPLE.join('');
-      if (isBeatsRequest) {
+      if (isPlanAsk) {
+        content =
+          '这一章的问题在结尾：钩子太弱，读者没有翻页动力。\n' +
+          '建议把「系统提示猎手将至」提前到中间，让读者提前知道危险，结尾再抛一个具体威胁。';
+      } else if (isPlanRevise) {
+        content =
+          '1. 【校招会】林砚被HR当众嫌弃学历 → 围观者哄笑\n' +
+          '2. 【反击】他报出自己公司的估值 → 笑声停了\n' +
+          '3. 【钩子】猎手递来一张写着「你也是结算对象」的名片';
+      } else if (isBeatsRequest) {
         content =
           '1. 【祠堂/除名】林尘跪在雪中听家主宣读除籍 → 他失去族籍\n' +
           '2. 【沉默】二叔经过却不发一言 → 家族彻底凉薄\n' +

@@ -479,11 +479,14 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       targetVolume?.title?.replace(/\s+/g, ' ').trim() ||
       parsed.data.volumeTitle?.trim() ||
       `第${volumes.length + 1}卷`;
-    const volumeSummary = targetVolume?.summary ?? '';
+    const volumeSummary = parsed.data.volumeSummary ?? targetVolume?.summary ?? '';
 
     const count = Math.max(1, Math.min(300, parsed.data.chapterCount ?? 50));
     const startNumber = existing.length + 1;
-    const batchTotal = Math.ceil(count / CHAPTER_BATCH_SIZE);
+    const titlesOnly = Boolean(parsed.data.titlesOnly);
+    // 只要标题时一批可以写 50 章，快得多
+    const batchSize = titlesOnly ? 50 : CHAPTER_BATCH_SIZE;
+    const batchTotal = Math.ceil(count / batchSize);
 
     const idea = [
       `书名：${project.title}`,
@@ -500,28 +503,40 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       phase: 'chapters',
       done: 0,
       total: batchTotal,
-      note: `${volumeTitle} · 第 ${startNumber} 章起，共 ${count} 章`,
+      note: `${volumeTitle} · 第 ${startNumber} 章起，共 ${count} 章${titlesOnly ? '（仅章节名）' : ''}`,
     });
 
     runJob(job, async () => {
       const chapters: { title: string; outline: string }[] = [];
       for (let batch = 0; batch < batchTotal; batch++) {
-        const batchStart = startNumber + batch * CHAPTER_BATCH_SIZE;
-        const batchCount = Math.min(CHAPTER_BATCH_SIZE, count - batch * CHAPTER_BATCH_SIZE);
+        const batchStart = startNumber + batch * batchSize;
+        const batchCount = Math.min(batchSize, count - batch * batchSize);
 
-        const prompt = buildVolumeChaptersPrompt({
-          projectTitle: project.title,
-          logline: project.logline,
-          genre: project.genre,
-          styleGuide: project.styleGuide,
-          volumeTitle,
-          volumeSummary,
-          idea,
-          startNumber: batchStart,
-          count: batchCount,
-          existingTitles: [...existing.map((c) => c.title), ...chapters.map((c) => c.title)],
-          instruction: parsed.data.instruction,
-        });
+        const prompt = titlesOnly
+          ? buildTitleBatchPrompt({
+              projectTitle: project.title,
+              logline: project.logline,
+              genre: project.genre,
+              idea,
+              volumeTitles: [volumeTitle],
+              volumeIndexFor: Array.from({ length: batchCount }, () => 0),
+              startNumber: batchStart,
+              count: batchCount,
+              previousTitles: [...existing.map((c) => c.title), ...chapters.map((c) => c.title)],
+            })
+          : buildVolumeChaptersPrompt({
+              projectTitle: project.title,
+              logline: project.logline,
+              genre: project.genre,
+              styleGuide: project.styleGuide,
+              volumeTitle,
+              volumeSummary,
+              idea,
+              startNumber: batchStart,
+              count: batchCount,
+              existingTitles: [...existing.map((c) => c.title), ...chapters.map((c) => c.title)],
+              instruction: parsed.data.instruction,
+            });
 
         const content = await completeAccumulated(
           config,
@@ -532,7 +547,10 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
           { maxTokens: draftBudget(config), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
         );
 
-        const got = parseVolumeChapters(content).slice(0, batchCount);
+        const parsedBatch = titlesOnly
+          ? parseTitleBatch(content, 1).map((c) => ({ title: c.title, outline: '' }))
+          : parseVolumeChapters(content);
+        const got = parsedBatch.slice(0, batchCount);
         got.forEach((c, i) =>
           chapters.push({
             // 模型可能每批从「第1章」重数，这里统一成全书连续编号
@@ -555,6 +573,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       startNumber,
       chapterCount: count,
       batches: batchTotal,
+      titlesOnly,
     });
   });
 

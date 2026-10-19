@@ -29,6 +29,12 @@ export function Editor() {
   const [content, setContent] = useState('');
   const [outline, setOutline] = useState('');
   const [beats, setBeats] = useState('');
+  const [planTarget, setPlanTarget] = useState<'outline' | 'beats'>('outline');
+  const [planInput, setPlanInput] = useState('');
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planResult, setPlanResult] = useState<{ mode: 'ask' | 'revise'; text: string } | null>(
+    null,
+  );
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [layerBusy, setLayerBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -210,6 +216,44 @@ export function Editor() {
     }
   }
 
+  /** 对大纲 / 细纲提问或要求整改 */
+  async function revisePlan(mode: 'ask' | 'revise') {
+    if (!chapter || !planInput.trim()) return;
+    setPlanBusy(true);
+    setPlanResult(null);
+    try {
+      const r = await api.post<{ mode: 'ask' | 'revise'; text: string }>(
+        '/api/ai/revise-plan',
+        {
+          projectId: chapter.projectId,
+          chapterId: chapter.id,
+          field: planTarget,
+          mode,
+          instruction: planInput.trim(),
+        },
+      );
+      setPlanResult(r);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  }
+
+  /** 把整改结果应用到对应字段（只是填进输入框和本地状态，仍需保存） */
+  function applyPlan() {
+    if (!planResult || planResult.mode !== 'revise') return;
+    if (planTarget === 'outline') {
+      setOutline(planResult.text);
+      markEdit({ outline: planResult.text });
+    } else {
+      setBeats(planResult.text);
+      markEdit({ beats: planResult.text });
+    }
+    setPlanResult(null);
+    setPlanInput('');
+  }
+
   /** 单章补大纲（目录只出了名字时用） */
   async function genOutline() {
     if (!chapter) return;
@@ -315,6 +359,76 @@ export function Editor() {
                 markEdit({ outline: e.target.value });
               }}
             />
+          </div>
+
+          {/* 大纲/细纲：提问与整改 */}
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <span>AI 提问 / 整改</span>
+              <span style={{ display: 'flex', gap: 4 }}>
+                <button
+                  className={`count-chip${planTarget === 'outline' ? ' on' : ''}`}
+                  onClick={() => setPlanTarget('outline')}
+                >
+                  针对大纲
+                </button>
+                <button
+                  className={`count-chip${planTarget === 'beats' ? ' on' : ''}`}
+                  onClick={() => setPlanTarget('beats')}
+                >
+                  针对细纲
+                </button>
+              </span>
+            </label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                value={planInput}
+                onChange={(e) => setPlanInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) void revisePlan('revise');
+                }}
+                placeholder="问：这章会不会跟第3章冲突？  改：把冲突提前到开头，压成三拍"
+                style={{ flex: 1 }}
+              />
+              <button
+                onClick={() => void revisePlan('ask')}
+                disabled={planBusy || !planInput.trim()}
+                title="只回答，不改文本"
+              >
+                提问
+              </button>
+              <button
+                className="primary"
+                onClick={() => void revisePlan('revise')}
+                disabled={planBusy || !planInput.trim()}
+                title="按你的要求重写这一段"
+              >
+                {planBusy ? '处理中…' : '整改'}
+              </button>
+            </div>
+
+            {planResult && (
+              <div className="plan-result">
+                <div className="plan-result-head">
+                  <span>{planResult.mode === 'ask' ? '回答' : `整改后的${planTarget === 'outline' ? '大纲' : '细纲'}`}</span>
+                  <span style={{ display: 'flex', gap: 6 }}>
+                    {planResult.mode === 'revise' && (
+                      <button style={{ padding: '2px 8px', fontSize: 11 }} onClick={applyPlan}>
+                        应用
+                      </button>
+                    )}
+                    <button
+                      className="ghost"
+                      style={{ padding: '2px 8px', fontSize: 11 }}
+                      onClick={() => setPlanResult(null)}
+                    >
+                      关闭
+                    </button>
+                  </span>
+                </div>
+                <div className="plan-result-body">{planResult.text}</div>
+              </div>
+            )}
           </div>
 
           {/* 细纲：把大纲拆成可写的节拍 */}

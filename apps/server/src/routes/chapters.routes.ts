@@ -13,7 +13,7 @@ import {
   updateVolume,
 } from '../repos/chapters.repo.js';
 import { getProject, touchProject } from '../repos/projects.repo.js';
-import { archiveDeleted } from '../repos/backup.js';
+import { archiveDeleted, archiveDeletedBatch } from '../repos/backup.js';
 import { chapterInput, volumeInput } from './schemas.js';
 
 export async function chapterRoutes(app: FastifyInstance): Promise<void> {
@@ -133,13 +133,21 @@ export async function chapterRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: 'empty', message: '没有选中任何章节' });
       }
 
-      let deleted = 0;
+      const doomed = [];
       for (const id of ids.slice(0, 1000)) {
         const chapter = getChapter(id);
         // 只删本项目下的章节，避免误删
         if (!chapter || chapter.projectId !== project.id) continue;
-        archiveDeleted('chapter', { deletedAt: new Date().toISOString(), chapter });
-        if (deleteChapter(id)) deleted++;
+        doomed.push(chapter);
+      }
+      // 整批写一个留档文件，删再多也不会把前面的记录挤掉
+      if (doomed.length) {
+        archiveDeletedBatch('chapter', doomed, { projectId: project.id });
+      }
+
+      let deleted = 0;
+      for (const chapter of doomed) {
+        if (deleteChapter(chapter.id)) deleted++;
       }
       touchProject(project.id);
       return { ok: true, deleted };
