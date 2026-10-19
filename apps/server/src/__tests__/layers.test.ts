@@ -46,6 +46,26 @@ test('buildBeatsPrompt 带上书名、大纲与前情', () => {
   assert.match(p.system, /钩子/);
 });
 
+test('buildBeatsPrompt 要求人称与正文一致并带设定', () => {
+  const p = buildBeatsPrompt(
+    project,
+    { ...chapter, content: '我睁开眼，看见房梁。' } as Chapter,
+    [],
+    '## 设定（硬约束）\n- [人物] 我：冷院皇子',
+  );
+  assert.match(p.system, /第一人称/);
+  assert.match(p.system, /不要写成「他」/);
+  assert.match(p.system, /冷院皇子/);
+  assert.match(p.user, /已写正文开头/);
+});
+
+test('buildScenesPrompt 要求 pov 与正文一致、称谓符合作者设定', () => {
+  const p = buildScenesPrompt({ ...project, genre: '历史' } as Project, chapter, '设定摘要');
+  assert.match(p.system, /pov 必须与正文的叙述视角一致/);
+  assert.match(p.system, /阿哥/);
+  assert.match(p.system, /设定摘要/);
+});
+
 test('buildScenesPrompt 要求目标-阻力-结果', () => {
   const p = buildScenesPrompt({ ...project, genre: '玄幻' } as Project, chapter);
   assert.match(p.system, /目标/);

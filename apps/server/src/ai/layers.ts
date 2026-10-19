@@ -7,6 +7,7 @@ export function buildBeatsPrompt(
   project: Project,
   chapter: Chapter,
   priorSummaries: string[],
+  settingBrief?: string,
 ): { system: string; user: string } {
   const system = `你是小说结构编辑，负责把「章节大纲」拆成可执行的「细纲」（beat sheet）。
 
@@ -14,15 +15,18 @@ export function buildBeatsPrompt(
 - 按顺序列出 5-8 个节拍，每个节拍一行，格式：\`1. 【场景/动作】具体发生了什么 → 造成什么变化\`
 - 每个节拍都要有**具体动作或对话**，不要写「展现人物性格」这种抽象描述
 - 最后一个节拍必须是一个钩子（悬念/转折/新问题）
+- **人称必须与正文一致**：如果作品用第一人称（主角称「我」），细纲也用「我」写，不要写成「他」
 - 只输出细纲正文，不要解释，不要标题
 
 作品：《${project.title}》
 文风：${project.styleGuide || '自然流畅'}
-${priorSummaries.length ? `前情：${priorSummaries.join('；')}` : ''}`;
+${priorSummaries.length ? `前情：${priorSummaries.join('；')}` : ''}
+${settingBrief ? `\n${settingBrief}` : ''}`;
 
   const user = `本章：${chapter.title}
 本章大纲：${chapter.outline || '（作者还没写大纲，请根据书名和上文合理设计）'}
 ${chapter.beats ? `已有细纲（可优化）：\n${chapter.beats}` : ''}
+${chapter.content.trim() ? `已写正文开头（人称/称谓以此为准）：\n${chapter.content.slice(0, 300)}` : ''}
 
 请输出细纲。`;
 
@@ -33,6 +37,7 @@ ${chapter.beats ? `已有细纲（可优化）：\n${chapter.beats}` : ''}
 export function buildScenesPrompt(
   project: Project,
   chapter: Chapter,
+  settingBrief?: string,
 ): { system: string; user: string } {
   const system = `你是小说场景设计师。把一章拆成 3-6 个**场景卡**，每张卡是连续时空中的一段戏。
 
@@ -55,12 +60,17 @@ export function buildScenesPrompt(
 - 场景之间必须有因果推进，不能各自独立
 - 每个场景都要有「目标-阻力-结果」三要素
 - 不要写成大纲复述，要具体到「在哪、和谁、争什么」
+- **pov 必须与正文的叙述视角一致**：第一人称作品里 pov 写「我」；且只写主角经历过的场景，
+  不要凭空加主角不在场的场景
+- **台词里的人称要符合作者设定**（例如太监称皇子「阿哥」而不是「殿下」）
 
-作品：《${project.title}》｜题材：${project.genre || '未定'}`;
+作品：《${project.title}》｜题材：${project.genre || '未定'}
+${settingBrief ? `\n${settingBrief}` : ''}`;
 
   const user = `本章：${chapter.title}
 本章大纲：${chapter.outline || '（无）'}
 细纲：${chapter.beats || '（无，请按大纲合理拆分）'}
+${chapter.content.trim() ? `已写正文开头（人称/称谓以此为准）：\n${chapter.content.slice(0, 300)}` : ''}
 
 请输出场景卡。`;
 

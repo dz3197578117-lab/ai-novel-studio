@@ -10,6 +10,7 @@ import {
 import { getChapter, listPriorSummaries, updateChapter } from '../repos/chapters.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
+import { buildSettingBrief } from '../ai/briefing.js';
 import { buildBeatsPrompt, buildScenesPrompt, parseSceneCards } from '../ai/layers.js';
 import { sceneInput } from './schemas.js';
 
@@ -76,7 +77,7 @@ export async function layerRoutes(app: FastifyInstance): Promise<void> {
     const priors = listPriorSummaries(project.id, chapter.order, 3)
       .reverse()
       .map((p) => `${p.title}：${p.summary}`);
-    const prompt = buildBeatsPrompt(project, chapter, priors);
+    const prompt = buildBeatsPrompt(project, chapter, priors, buildSettingBrief(project.id));
 
     try {
       const content = await completeAccumulated(
@@ -122,7 +123,7 @@ export async function layerRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
 
-    const prompt = buildScenesPrompt(project, chapter);
+    const prompt = buildScenesPrompt(project, chapter, buildSettingBrief(project.id));
     try {
       const content = await completeAccumulated(
         config,

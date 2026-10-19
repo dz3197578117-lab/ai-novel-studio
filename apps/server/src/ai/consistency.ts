@@ -98,6 +98,11 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 5. plot —— 情节是否有逻辑硬伤（因果不成立、动机不足、能力越界）
 6. foreshadow —— 伏笔是否有埋无收、或回收方式与铺垫矛盾
 7. history —— 是否符合作者硬约束、史实、制度与常识（官制、称谓、礼仪、器物、银钱数目、办事流程）
+8. pov —— 人称与视角是否前后一致（第一人称正文 vs 第三人称大纲/细纲、视角人物跳变、
+   写进主角不可能知道的信息、称呼与身份不符如太监称未封爵皇子为「殿下」）
+
+对 pov 维度：先看正文实际用的人称（「我」还是「他」），再看大纲/细纲/场景卡是否与之一致，
+以及称谓是否符合身份。正文与规划材料人称不一致算 medium。
 
 对 history 维度要特别严格：
 - 如果作者写了「硬约束」，任何与之冲突的情节都算 high
@@ -165,6 +170,7 @@ const KINDS = new Set([
   'plot',
   'foreshadow',
   'history',
+  'pov',
   'other',
 ]);
 const SEVERITIES = new Set(['low', 'medium', 'high']);

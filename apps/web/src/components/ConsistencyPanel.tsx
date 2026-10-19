@@ -38,6 +38,7 @@ const KIND_LABEL: Record<string, string> = {
   plot: '情节',
   foreshadow: '伏笔',
   history: '史实/制度',
+  pov: '视角/人称',
   other: '其它',
 };
 
