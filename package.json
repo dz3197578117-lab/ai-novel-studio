@@ -17,6 +17,7 @@
     "test": "pnpm --filter @novelforge/server test",
     "test:e2e": "node scripts/e2e.mjs",
     "test:e2e:write": "node scripts/e2e-write.mjs",
+    "test:scroll": "node scripts/diagnose-scroll.mjs",
     "mock:llm": "node scripts/mock-llm.mjs",
     "seed": "pnpm --filter @novelforge/server seed",
     "clean": "node scripts/clean.mjs"

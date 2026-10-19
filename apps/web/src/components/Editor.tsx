@@ -16,6 +16,8 @@ export function Editor() {
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fictionRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollToBottomRef = useRef(false);
 
   // 切换章节时同步本地状态
   useEffect(() => {
@@ -25,6 +27,20 @@ export function Editor() {
     setOutline(chapter.outline);
     setDirty(false);
   }, [chapter?.id]);
+
+  // 切章后回到顶部，避免停留在上一章的位置
+  useEffect(() => {
+    const el = fictionRef.current;
+    if (el) el.scrollTop = 0;
+  }, [chapter?.id]);
+
+  // AI 回填后滚到底部，让用户看到新增的正文
+  useEffect(() => {
+    if (!scrollToBottomRef.current) return;
+    scrollToBottomRef.current = false;
+    const el = fictionRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [content]);
 
   // 自动保存（1.2s 防抖）
   useEffect(() => {
@@ -61,6 +77,7 @@ export function Editor() {
     function onApply(e: Event) {
       const text = (e as CustomEvent<string>).detail ?? '';
       if (!text) return;
+      scrollToBottomRef.current = true;
       setContent((prev) => prev + text);
       setDirty(true);
     }
@@ -127,17 +144,12 @@ export function Editor() {
 
           <textarea
             className="fiction"
+            ref={fictionRef}
             value={content}
             placeholder="在这里写正文，或让右侧 AI 帮你续写…"
             onChange={(e) => {
               setContent(e.target.value);
               setDirty(true);
-            }}
-            style={{ height: 'auto' }}
-            onInput={(e) => {
-              const el = e.currentTarget;
-              el.style.height = 'auto';
-              el.style.height = `${el.scrollHeight}px`;
             }}
           />
         </div>

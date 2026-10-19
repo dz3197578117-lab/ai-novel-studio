@@ -215,14 +215,25 @@ textarea {
 }
 .editor-body {
   flex: 1;
-  overflow-y: auto;
-  padding: 28px 24px 60vh;
+  /* 内层自己滚，外层不滚：避免「内容被裁剪且外层不可滚」的死局 */
+  overflow: hidden;
+  min-height: 0;
+  padding: 24px 24px 16px;
   display: flex;
   justify-content: center;
 }
 .editor-inner {
   width: 100%;
   max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 14px;
+}
+/* 大纲区域高度固定，不参与缩放 */
+.editor-inner > .field {
+  flex-shrink: 0;
+  margin-bottom: 0;
 }
 .fiction {
   font-family: var(--font-read);
@@ -232,13 +243,15 @@ textarea {
   white-space: pre-wrap;
   word-break: break-word;
   outline: none;
-  min-height: 300px;
+  /* 填满剩余高度并内部滚动，任何长度的章节都完整可达 */
+  flex: 1;
+  min-height: 0;
   background: transparent;
   border: none;
-  padding: 0;
+  padding: 0 8px 40vh 0;
   width: 100%;
   resize: none;
-  overflow: hidden;
+  overflow-y: auto;
 }
 .outline-box {
   margin-bottom: 20px;

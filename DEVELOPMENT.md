@@ -116,6 +116,25 @@ Vite 配置读取该文件自动跟随。不需要手动改端口。
 
 SQLite WAL 文件释放有延迟，测试清理要重试。见 `api.test.ts` 的 `after()`。
 
+**5. 正文区无法滚动（内容被裁掉）**
+
+早期的做法是「textarea 高度跟随内容增长」+ `overflow: hidden`，靠 `onInput` 重算高度。
+问题：章节切换是**程序赋值**，不会触发 `input` 事件，高度停在 `min-height`，
+而 `overflow: hidden` 会把超出部分裁掉——用户看到的正文少了一截，滚轮也滚不动。
+
+现在改为**固定高度 + 内部滚动**，不再依赖任何手动高度计算：
+
+```css
+.editor-body { overflow: hidden; display: flex; }         /* 外层不滚 */
+.editor-inner { display: flex; flex-direction: column; min-height: 0; }
+.fiction { flex: 1; min-height: 0; overflow-y: auto; }    /* 内层自己滚 */
+```
+
+原则：**能用 CSS 布局解决的问题，不要用 JS 去算高度**。任何「内容怎么进来」的路径
+（切章、AI 回填、导入）都不会再被裁掉。
+
+验证脚本：`node scripts/diagnose-scroll.mjs`（派发真实滚轮事件，检查 scrollTop 是否变化）。
+
 ## 数据库迁移
 
 改表结构时：
