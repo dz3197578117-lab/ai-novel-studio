@@ -29,6 +29,8 @@ export function Editor() {
   const [content, setContent] = useState('');
   const [outline, setOutline] = useState('');
   const [beats, setBeats] = useState('');
+  /** 规划区（细纲/场景卡/AI 整改）默认收起，避免把正文挤成 0 高度 */
+  const [showLayers, setShowLayers] = useState(false);
   const [planTarget, setPlanTarget] = useState<'outline' | 'beats'>('outline');
   const [planInput, setPlanInput] = useState('');
   const [planBusy, setPlanBusy] = useState(false);
@@ -361,6 +363,21 @@ export function Editor() {
             />
           </div>
 
+          {/* 规划区（细纲 / 场景卡 / AI 整改）默认收起 */}
+          <div className="layers-bar">
+            <span className="layers-title">
+              规划区
+              <span className="layers-meta">
+                细纲{beats.trim() ? ` ${beats.trim().length} 字` : '（空）'} · 场景 {scenes.length}
+              </span>
+            </span>
+            <button className="ghost" onClick={() => setShowLayers((v) => !v)}>
+              {showLayers ? '收起 ▲' : '展开 ▼'}
+            </button>
+          </div>
+
+          {showLayers && (
+            <>
           {/* 大纲/细纲：提问与整改 */}
           <div className="field" style={{ marginBottom: 0 }}>
             <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -493,6 +510,8 @@ export function Editor() {
               </div>
             )}
           </div>
+            </>
+          )}
 
           <textarea
             className="fiction"

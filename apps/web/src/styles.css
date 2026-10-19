@@ -288,6 +288,32 @@ textarea {
   flex-direction: column;
   min-height: 0;
   gap: 14px;
+  /* 规划区展开时整列可滚，避免正文被挤到看不见且没有滚动条 */
+  overflow-y: auto;
+  padding-right: 6px;
+}
+/* 规划区折叠条 */
+.layers-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  flex-shrink: 0;
+}
+.layers-title {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.layers-meta {
+  color: #8b93a1;
+  font-size: 11px;
 }
 /* 大纲区域高度固定，不参与缩放 */
 .editor-inner > .field {
@@ -302,9 +328,10 @@ textarea {
   white-space: pre-wrap;
   word-break: break-word;
   outline: none;
-  /* 填满剩余高度并内部滚动，任何长度的章节都完整可达 */
+  /* 填满剩余高度并内部滚动，任何长度的章节都完整可达；
+     再加一个保底高度：规划区再长也不会把正文压成 0 */
   flex: 1;
-  min-height: 0;
+  min-height: 45vh;
   background: transparent;
   border: none;
   padding: 0 8px 40vh 0;
