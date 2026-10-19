@@ -118,13 +118,33 @@ const server = http.createServer((req, res) => {
 
       // 「策划一部小说」的请求返回方案 JSON，其余返回正文
       const isDraftRequest = /网络小说策划/.test(system?.content ?? '');
+      // 分批生成章节大纲
+      const isBatchRequest = /编写章节大纲/.test(system?.content ?? '');
       // 对话式访谈：第一轮反问，第二轮给结论
       const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
       const userTurns = (String(lastUser?.content ?? '').match(/用户：/g) ?? []).length;
-      console.log('is draft request:', isDraftRequest, '| is interview:', isInterviewRequest, '| turns:', userTurns);
+      console.log(
+        'is draft request:', isDraftRequest,
+        '| is batch:', isBatchRequest,
+        '| is interview:', isInterviewRequest,
+        '| turns:', userTurns,
+      );
 
       let content = SAMPLE.join('');
-      if (isDraftRequest) {
+      if (isBatchRequest) {
+        // 按提示词里给定的章号与卷号返回对应数量的章节
+        const asked = [...String(lastUser?.content ?? '').matchAll(
+          /第\s*(\d+)\s*章\s*→\s*volumeIndex\s*(\d+)/g,
+        )];
+        content = JSON.stringify({
+          chapters: asked.map((m) => ({
+            volumeIndex: Number(m[2]),
+            // 故意用「第1章」开头，验证服务端会不会纠正成全局连续编号
+            title: `第1章 · 模拟章节${m[1]}`,
+            outline: `模拟大纲：第 ${m[1]} 章的冲突。`,
+          })),
+        });
+      } else if (isDraftRequest) {
         content = JSON.stringify(DRAFT_SAMPLE);
       } else if (isInterviewRequest) {
         content = JSON.stringify(

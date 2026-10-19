@@ -212,6 +212,38 @@ server: {
 现在 `Editor` 维护一份编辑快照，切章时先把上一章的未保存内容 `PATCH` 回去，再加载新章；
 另外加了 `Ctrl+S` 立即保存和离开页面前的浏览器提醒。
 
+**9. 「生成方案」报 JSON 解析失败（推理模型吃满 max_tokens）**
+
+真实案例：商汤 `deepseek-flash` 生成 6 章方案时报「模型返回的方案格式有误」。
+抓原始返回才看清原因：
+
+```
+finish_reason: "length"                 ← 输出被截断
+completion_tokens: 4096 / 4096          ← 顶到上限
+completion_tokens_details.reasoning_tokens: 1327   ← 其中 1300+ 是思考
+```
+
+推理模型的**思考过程也算在 max_tokens 里**，配置里默认 4096 的话，
+真正用来写 JSON 的只剩两千多 token，方案写到一半就断了，自然解析不出来。
+
+现在的三层处理：
+
+1. **扩大预算**：`draftBudget()` 至少给 8192（`routes/draft.routes.ts`）
+2. **能救就救**：`repairTruncatedJson()` 退到最后一个完整元素处补括号，
+   少几章也比整个失败好（前端会提示「你要求 N 章，AI 给了 M 章」）
+3. **装不下就分批**：超过 `SINGLE_CALL_MAX_CHAPTERS`（10 章）时走
+   骨架一次 + 章节按 `CHAPTER_BATCH_SIZE`（12 章）分批，见 `generateChunked()`
+
+分批带来的两个坑也一并处理了：
+
+- **限流**：连续请求会撞 `429 TPM exceeded`。`postWithRetry()` 按 `Retry-After`
+  或指数退避重试（最多 4 次），批次之间再等 2.5 秒
+- **章号从 1 重数**：模型每批都会写「第1章」。批次提示词改成给全局章号，
+  并且 `renumberChapterTitle()` 在服务端兜底重编号
+
+排查这类问题时用 `scripts/diagnose-provider.mjs`：它用当前生效配置直接请求一次，
+打印 `finish_reason`、usage 和原文首尾，不改数据库。
+
 ## 数据库迁移
 
 改表结构时：

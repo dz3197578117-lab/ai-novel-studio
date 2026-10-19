@@ -1,17 +1,171 @@
 import type { FastifyInstance } from 'fastify';
-import type { InterviewMessage, NovelDraft, Project } from '@novelforge/shared';
-import { buildDraftPrompt, parseDraft } from '../ai/draft.js';
+import type { AiProviderConfig, DraftChapter, InterviewMessage, NovelDraft, Project } from '@novelforge/shared';
+import {
+  CHAPTER_BATCH_SIZE,
+  SINGLE_CALL_MAX_CHAPTERS,
+  buildChapterBatchPrompt,
+  buildDraftPrompt,
+  buildSkeletonPrompt,
+  parseChapterBatch,
+  parseDraft,
+  parseSkeleton,
+  renumberChapterTitle,
+  volumeCountFor,
+} from '../ai/draft.js';
 import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js';
-import { AiError, complete, loadTextConfig } from '../ai/client.js';
+import { AiError, complete, completeDetailed, loadTextConfig } from '../ai/client.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import { createChapter, createVolume } from '../repos/chapters.repo.js';
 import { draftRequestSchema, interviewRequest, novelDraftSchema } from './schemas.js';
 
-/** 整本小说生成最长等待时间：大模型出 10-30 章方案可能要一分多钟 */
-const DRAFT_TIMEOUT_MS = 150_000;
+/** 单次调用的超时时间（含重试等待） */
+const DRAFT_CALL_TIMEOUT_MS = 180_000;
 /** 单轮对话应该很快 */
 const INTERVIEW_TIMEOUT_MS = 60_000;
+/** 批次之间的间隔，避免连续打满服务商的 TPM 限流 */
+const BATCH_DELAY_MS = 2500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * 生成方案的输出预算。
+ * 推理模型（如 deepseek-flash）的「思考」也吃 max_tokens，
+ * 用配置里的 4096 会把正式内容挤掉，所以至少给到 8192。
+ */
+function draftBudget(config: AiProviderConfig): number {
+  return Math.max(config.maxTokens || 0, 8192);
+}
+
+/** 把第 index 章分配到某一卷（按章数均分） */
+function volumeIndexForChapter(index: number, total: number, volumeCount: number): number {
+  if (volumeCount <= 1) return 0;
+  const idx = Math.floor((index * volumeCount) / total);
+  return Math.max(0, Math.min(volumeCount - 1, idx));
+}
+
+/** 章节数不多时：一次调用出完整方案 */
+async function generateSingle(
+  config: AiProviderConfig,
+  req: { idea: string; genre?: string; chapterCount: number },
+  chapterCount: number,
+): Promise<NovelDraft> {
+  const prompt = buildDraftPrompt({ ...req, chapterCount });
+  const res = await completeDetailed(
+    config,
+    [
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ],
+    AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
+    { maxTokens: draftBudget(config) },
+  );
+
+  try {
+    return parseDraft(res.content);
+  } catch (e) {
+    if (res.finishReason === 'length') {
+      throw new AiError(
+        '模型输出被截断（达到最大输出 tokens）：这一次要写的章节太多。' +
+          '请把规划章数调小，或在设置里把该配置的「最大输出 tokens」调大后重试。',
+      );
+    }
+    throw e;
+  }
+}
+
+/**
+ * 章节数较多时：先出骨架，再分批写章节大纲。
+ * 单次输出装不下 100 章，分批是唯一稳妥的办法。
+ */
+async function generateChunked(
+  config: AiProviderConfig,
+  req: { idea: string; genre?: string; chapterCount: number },
+  chapterCount: number,
+): Promise<NovelDraft> {
+  const budget = draftBudget(config);
+
+  // 1. 骨架
+  const skPrompt = buildSkeletonPrompt({ ...req, chapterCount });
+  const skRes = await completeDetailed(
+    config,
+    [
+      { role: 'system', content: skPrompt.system },
+      { role: 'user', content: skPrompt.user },
+    ],
+    AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
+    { maxTokens: budget },
+  );
+  const skeleton = parseSkeleton(skRes.content);
+
+  // 保证卷数够用（模型可能少给）
+  const wantVolumes = volumeCountFor(chapterCount);
+  while (skeleton.volumes.length < wantVolumes) {
+    skeleton.volumes.push({
+      title: `第${skeleton.volumes.length + 1}卷`,
+      summary: '',
+    });
+  }
+
+  // 2. 分批写章节
+  const chapters: DraftChapter[] = [];
+  const batchTotal = Math.ceil(chapterCount / CHAPTER_BATCH_SIZE);
+
+  for (let start = 0, batch = 1; start < chapterCount; start += CHAPTER_BATCH_SIZE, batch++) {
+    const count = Math.min(CHAPTER_BATCH_SIZE, chapterCount - start);
+    const volumeIndexFor = Array.from({ length: count }, (_, i) =>
+      volumeIndexForChapter(start + i, chapterCount, skeleton.volumes.length),
+    );
+    const prompt = buildChapterBatchPrompt({
+      idea: req.idea,
+      title: skeleton.title,
+      logline: skeleton.logline,
+      volumes: skeleton.volumes,
+      volumeIndexFor,
+      startNumber: start + 1,
+      batchNumber: batch,
+      batchTotal,
+      previousTitles: chapters.map((c) => c.title),
+    });
+
+    const res = await completeDetailed(
+      config,
+      [
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user },
+      ],
+      AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
+      { maxTokens: budget },
+    );
+
+    let got: DraftChapter[];
+    try {
+      got = parseChapterBatch(res.content, skeleton.volumes.length);
+    } catch (e) {
+      throw new AiError(
+        `第 ${batch}/${batchTotal} 批章节生成失败（${(e as Error).message}）。` +
+          '可以重试，或把规划章数调小一些。',
+      );
+    }
+    chapters.push(
+      ...got.slice(0, count).map((c, i) => ({
+        ...c,
+        // 模型每批会从「第1章」重新数，这里统一成全书连续编号
+        title: renumberChapterTitle(c.title, start + i),
+      })),
+    );
+
+    // 批次之间稍等一下，别把服务商的每分钟额度打满
+    if (start + CHAPTER_BATCH_SIZE < chapterCount) {
+      await sleep(BATCH_DELAY_MS);
+    }
+  }
+
+  return { ...skeleton, chapters };
+}
+
 
 export async function draftRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -85,24 +239,21 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
 
-    const prompt = buildDraftPrompt(parsed.data);
+    const chapterCount = Math.max(1, Math.min(100, parsed.data.chapterCount ?? 10));
+    const request = { ...parsed.data, chapterCount };
+
     try {
-      const raw = await complete(
-        config,
-        [
-          { role: 'system', content: prompt.system },
-          { role: 'user', content: prompt.user },
-        ],
-        AbortSignal.timeout(DRAFT_TIMEOUT_MS),
-      );
-      const draft = parseDraft(raw);
+      const draft =
+        chapterCount <= SINGLE_CALL_MAX_CHAPTERS
+          ? await generateSingle(config, request, chapterCount)
+          : await generateChunked(config, request, chapterCount);
       return { draft };
     } catch (e) {
       if (e instanceof AiError) {
         return reply.code(502).send({ error: 'draft_failed', message: e.message });
       }
       const msg = (e as Error).name === 'TimeoutError'
-        ? '生成超时（超过 150 秒），请减少章节数或重试。'
+        ? '生成超时，请减少章节数或重试。'
         : `生成失败：${(e as Error).message}`;
       return reply.code(502).send({ error: 'draft_failed', message: msg });
     }

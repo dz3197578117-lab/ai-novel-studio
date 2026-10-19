@@ -17,6 +17,79 @@ export class AiError extends Error {
   }
 }
 
+// ───────────────────────── 重试与限流 ─────────────────────────
+
+const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 4;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 支持 `Retry-After: 秒` 与 HTTP 日期两种写法 */
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
+  const at = Date.parse(header);
+  if (Number.isFinite(at)) return Math.max(0, at - Date.now());
+  return null;
+}
+
+/**
+ * 带重试的 POST。
+ * 生成的批次一多就会撞到服务商的 TPM/RPM 限流（429），
+ * 这里按 Retry-After 或指数退避等待后重试，而不是直接失败给用户。
+ */
+async function postWithRetry(
+  url: string,
+  body: unknown,
+  config: AiProviderConfig,
+  signal?: AbortSignal,
+): Promise<Response> {
+  let lastDetail = '';
+  let lastStatus = 0;
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (e) {
+      // 网络层错误也重试一次
+      if (attempt === MAX_ATTEMPTS - 1) throw e;
+      await sleep(1500 * 2 ** attempt);
+      continue;
+    }
+
+    if (res.ok) return res;
+
+    lastStatus = res.status;
+    lastDetail = await res.text().catch(() => '');
+
+    if (!RETRY_STATUSES.has(res.status) || attempt === MAX_ATTEMPTS - 1) {
+      break;
+    }
+
+    // 优先听服务商的 Retry-After，否则指数退避（2s, 4s, 8s）
+    const waitMs = parseRetryAfter(res.headers.get('retry-after')) ?? 2000 * 2 ** attempt;
+    await sleep(Math.min(waitMs, 30_000));
+  }
+
+  const hint =
+    lastStatus === 429
+      ? '（服务商限流：请求太频繁或每分钟 token 超限，稍等一会再试，或减少规划章数）'
+      : '';
+  throw new AiError(`模型请求失败 (${lastStatus})${hint}: ${lastDetail.slice(0, 400)}`, lastStatus);
+}
+
 /**
  * 读取「当前生效」的那套模型配置。没配置或没 Key 时抛错，
  * 提示用户去设置页选一套或补充 Key。
@@ -44,25 +117,21 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<
   const { config, messages, signal } = opts;
   const url = joinUrl(config.baseUrl, '/chat/completions');
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
+  const res = await postWithRetry(
+    url,
+    {
       model: config.model,
       messages,
       stream: true,
       temperature: config.temperature ?? 0.8,
       max_tokens: config.maxTokens || undefined,
-    }),
+    },
+    config,
     signal,
-  });
+  );
 
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => '');
-    throw new AiError(`模型请求失败 (${res.status}): ${detail.slice(0, 500)}`, res.status);
+  if (!res.body) {
+    throw new AiError('模型没有返回数据流', res.status);
   }
 
   const reader = res.body.getReader();
@@ -106,36 +175,70 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<
   }
 }
 
-/** 非流式补全，用于摘要/起名等一次性任务 */
+/** 非流式补全的详细结果 */
+export interface CompletionResult {
+  content: string;
+  /** 'stop' = 正常结束；'length' = 达到 max_tokens 被截断 */
+  finishReason: string | null;
+  usage?: TokenUsage;
+}
+
+export interface CompleteOptions {
+  /** 覆盖配置里的最大输出 tokens（生成整本方案时需要更大的预算） */
+  maxTokens?: number;
+}
+
+/**
+ * 非流式补全（详细版）。
+ * 拿得到 finishReason，调用方才能区分「模型没按格式写」和「输出被截断」。
+ */
+export async function completeDetailed(
+  config: AiProviderConfig,
+  messages: ChatMessage[],
+  signal?: AbortSignal,
+  opts: CompleteOptions = {},
+): Promise<CompletionResult> {
+  const url = joinUrl(config.baseUrl, '/chat/completions');
+  const maxTokens = opts.maxTokens ?? config.maxTokens ?? undefined;
+  const res = await postWithRetry(
+    url,
+    {
+      model: config.model,
+      messages,
+      stream: false,
+      temperature: config.temperature ?? 0.8,
+      max_tokens: maxTokens || undefined,
+    },
+    config,
+    signal,
+  );
+  const json = (await res.json()) as {
+    choices?: {
+      message?: { content?: string };
+      finish_reason?: string;
+    }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  const choice = json.choices?.[0];
+  return {
+    content: choice?.message?.content ?? '',
+    finishReason: choice?.finish_reason ?? null,
+    usage: json.usage
+      ? {
+          promptTokens: json.usage.prompt_tokens ?? 0,
+          completionTokens: json.usage.completion_tokens ?? 0,
+        }
+      : undefined,
+  };
+}
+
+/** 非流式补全，只取文本（摘要等简单场景用） */
 export async function complete(
   config: AiProviderConfig,
   messages: ChatMessage[],
   signal?: AbortSignal,
 ): Promise<string> {
-  const url = joinUrl(config.baseUrl, '/chat/completions');
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      stream: false,
-      temperature: config.temperature ?? 0.8,
-      max_tokens: config.maxTokens || undefined,
-    }),
-    signal,
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new AiError(`模型请求失败 (${res.status}): ${detail.slice(0, 500)}`, res.status);
-  }
-  const json = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  return json.choices?.[0]?.message?.content ?? '';
+  return (await completeDetailed(config, messages, signal)).content;
 }
 
 function joinUrl(base: string, suffix: string): string {

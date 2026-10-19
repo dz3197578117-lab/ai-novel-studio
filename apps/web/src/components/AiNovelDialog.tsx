@@ -243,6 +243,14 @@ export function AiNovelDialog({
               <div>{reply.brief}</div>
             </div>
           )}
+
+          {drafting && (
+            <div className="empty" style={{ padding: '10px 0' }}>
+              {chapterCount > 10
+                ? `章节较多，正在分批生成 ${chapterCount} 章，可能需要 1-3 分钟…`
+                : '正在构思方案，通常需要 10-60 秒…'}
+            </div>
+          )}
         </>
       ) : (
         <>
