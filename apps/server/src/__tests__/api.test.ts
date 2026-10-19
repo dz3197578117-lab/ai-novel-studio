@@ -760,6 +760,88 @@ describe('一致性引擎（伏笔 / 时间线 / 检查）', () => {
   });
 });
 
+describe('DSH 一键导入', () => {
+  let realHome: string | undefined;
+
+  before(() => {
+    realHome = process.env.DSH_HOME;
+    const dir = path.join(dataDir, 'fake-dsh');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.credentials.yaml'),
+      [
+        'records:',
+        '  deepseek-account-platform/default:',
+        '    kind: grant',
+        '    payload:',
+        '      version: 1',
+        '      token: abc',
+        'refs:',
+        '  DEEPSEEK_API_KEY: sk-test-dsh-key-1234567890',
+      ].join('\n'),
+      'utf8',
+    );
+    process.env.DSH_HOME = dir;
+  });
+
+  after(() => {
+    if (realHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = realHome;
+  });
+
+  test('能探测到 DSH 凭据并只回打码值', async () => {
+    const res = await get('/api/dsh/status');
+    assert.equal(res.statusCode, 200);
+    const s = JSON.parse(res.body) as {
+      available: boolean;
+      keys: { name: string; masked: string }[];
+      recommended: string | null;
+      hasAccountToken: boolean;
+    };
+    assert.equal(s.available, true);
+    assert.equal(s.recommended, 'DEEPSEEK_API_KEY');
+    assert.ok(s.keys[0]!.masked.includes('••••'));
+    assert.ok(!s.keys[0]!.masked.includes('1234567890'), '不能泄露完整 Key');
+    assert.equal(s.hasAccountToken, true);
+  });
+
+  test('导入后生成配置并设为当前', async () => {
+    const res = await post('/api/dsh/import', {});
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body) as {
+      profile: { id: string; name: string; baseUrl: string; model: string };
+      sourceKey: string;
+    };
+    assert.equal(body.profile.name, 'DeepSeek（DSH 内置）');
+    assert.match(body.profile.baseUrl, /api\.deepseek\.com/);
+    assert.equal(body.sourceKey, 'DEEPSEEK_API_KEY');
+
+    const s = JSON.parse((await get('/api/settings')).body) as {
+      activeProfileId: string;
+      profiles: { id: string; hasApiKey: boolean }[];
+    };
+    assert.equal(s.activeProfileId, body.profile.id);
+    assert.equal(s.profiles.find((p) => p.id === body.profile.id)!.hasApiKey, true);
+  });
+
+  test('重复导入不会创建重复配置', async () => {
+    const before = JSON.parse((await get('/api/settings')).body).profiles.length;
+    const res = await post('/api/dsh/import', {});
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).reused, true);
+    const after = JSON.parse((await get('/api/settings')).body).profiles.length;
+    assert.equal(after, before);
+  });
+
+  test('找不到凭据时返回 404', async () => {
+    const empty = path.join(dataDir, 'empty-dsh');
+    fs.mkdirSync(empty, { recursive: true });
+    process.env.DSH_HOME = empty;
+    const res = await post('/api/dsh/import', {});
+    assert.equal(res.statusCode, 404);
+  });
+});
+
 describe('未配置模型时的写作接口', () => {
   test('当前配置没有 Key 时写作返回 412', async () => {
     // 造一个没有 Key 的配置并设为当前

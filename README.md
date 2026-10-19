@@ -22,7 +22,15 @@ pnpm dev          # 启动开发环境
 
 ### 接入模型（OpenAI 兼容）
 
-点 **⚙ 设置 → ＋ 添加**，可以直接点常用服务商预设（DeepSeek / OpenAI / 通义 / 本地 Ollama）一键填好地址和模型：
+**最省事：直接复用 DeepSeek Harness 的登录**
+
+如果你本机装过 DeepSeek Harness 并登录了 DeepSeek，打开 **⚙ 设置** 顶部会看到「从 DeepSeek Harness 导入」，
+点一下就会把它的 DeepSeek Key 复制成一套配置并设为当前，不用手抄 Key。
+
+- 只读：不会修改 DSH 的任何文件
+- Key 存进 NovelForge 自己的数据库，不会上传
+
+**手动配置**：点 **⚙ 设置 → ＋ 添加**，可以直接点常用服务商预设（DeepSeek / OpenAI / 通义 / 本地 Ollama）一键填好地址和模型：
 
 | 服务 | Base URL | 模型名示例 |
 | --- | --- | --- |

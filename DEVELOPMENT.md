@@ -36,6 +36,19 @@
 
 新增配置相关接口时，记得同步 `packages/shared` 的 `ModelProfile*` 类型和 `schemas.ts`。
 
+#### 复用 DSH 的 DeepSeek 登录（`repos/dsh.ts`）
+
+`GET /api/dsh/status` 探测本机 `~/.dsh/.credentials.yaml`，`POST /api/dsh/import` 把里面的
+`DEEPSEEK_API_KEY` 复制成一套配置（`https://api.deepseek.com/v1` + `deepseek-flash`）并设为当前。
+
+边界很明确，改的时候别越界：
+
+- **只读** DSH 的凭据文件，绝不写回；DSH 升级/退出不影响已导入的配置（各自独立一份 Key）
+- 接口**只回打码值**，真实 Key 只存在于 NovelForge 的 `settings` 表
+- 用 `DSH_HOME` 环境变量可指向别处，测试就是靠它注入假凭据
+- DSH 里还有一个 `deepseek-account-platform` 的账号 token（issuer 是 platform.deepseek.com），
+  那是网页端 OAuth 凭据，**不能**用于 API，所以导入只认 `*_API_KEY`
+
 ### 调整「AI 生成小说」的产出
 
 流程分三步，改之前先弄清边界：

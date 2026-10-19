@@ -45,6 +45,14 @@ function toEdit(p: ModelProfilePublic): EditState {
   };
 }
 
+interface DshInfo {
+  available: boolean;
+  home: string;
+  keys: { name: string; masked: string }[];
+  recommended: string | null;
+  hasAccountToken: boolean;
+}
+
 /**
  * 设置：多套模型配置，可随时切换当前使用哪一套。
  * 模型名支持从服务商拉取列表，也可手填。
@@ -57,6 +65,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [image, setImage] = useState({ baseUrl: '', apiKey: '', model: '' });
+  const [dsh, setDsh] = useState<DshInfo | null>(null);
+  const [dshBusy, setDshBusy] = useState(false);
 
   async function reload() {
     try {
@@ -74,7 +84,31 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     setModels([]);
     setMsg(null);
     void reload();
+    void api
+      .get<DshInfo>('/api/dsh/status')
+      .then(setDsh)
+      .catch(() => setDsh(null));
   }, [open]);
+
+  /** 一键把 DSH 本机登录的 DeepSeek Key 复制过来 */
+  async function importFromDsh() {
+    setDshBusy(true);
+    try {
+      const r = await api.post<{ profile: ModelProfilePublic; sourceKey: string; reused: boolean }>(
+        '/api/dsh/import',
+        {},
+      );
+      await reload();
+      setMsg({
+        ok: true,
+        text: `${r.reused ? '已存在，' : ''}已导入「${r.profile.name}」（来源 ${r.sourceKey}），并设为当前模型`,
+      });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    } finally {
+      setDshBusy(false);
+    }
+  }
 
   const activeId = settings?.activeProfileId ?? null;
   const profiles = settings?.profiles ?? [];
@@ -193,6 +227,31 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
 
   return (
     <Modal open={open} onClose={onClose} title="设置" wide>
+      {/* ── 从 DSH 一键导入 ── */}
+      <div className="settings-section">
+        <div className="settings-head">
+          <h3>从 DeepSeek Harness 导入</h3>
+        </div>
+        {dsh?.available && dsh.keys.length > 0 ? (
+          <>
+            <p className="hint" style={{ marginTop: 0 }}>
+              检测到本机 DSH 已登录，可直接复用它的 DeepSeek Key，不用再手抄一遍。
+              只会读取，不会修改 DSH 的任何文件；Key 存进 NovelForge 自己的数据库。
+            </p>
+            <div className="hint" style={{ marginBottom: 8 }}>
+              可用 Key：{dsh.keys.map((k) => `${k.name}（${k.masked}）`).join('、')}
+            </div>
+            <button className="primary" onClick={() => void importFromDsh()} disabled={dshBusy}>
+              {dshBusy ? '导入中…' : '使用 DSH 的 DeepSeek 接入'}
+            </button>
+          </>
+        ) : (
+          <p className="hint" style={{ marginTop: 0 }}>
+            没有检测到 DSH 的登录凭据（{dsh?.home ?? '~/.dsh'}）。可以在下面手动添加模型配置。
+          </p>
+        )}
+      </div>
+
       <div className="settings-section">
         <div className="settings-head">
           <h3>模型配置</h3>
