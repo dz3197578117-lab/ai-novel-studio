@@ -38,8 +38,13 @@
 
 ### 调整「AI 生成小说」的产出
 
-流程分两步，改之前先弄清边界：
+流程分三步，改之前先弄清边界：
 
+0. **对话访谈**（`POST /api/ai/interview`）
+   - 提示词与解析在 `server/src/ai/interview.ts`
+   - AI 必须返回 JSON：`{ say, options, done, brief }`；`done` 且 `brief` 非空才算聊清楚
+   - `parseInterviewResponse()` 做了兜底：没给 brief 时 `done` 强制为 false，避免用空需求去生成
+   - 前端 `AiNovelDialog` 负责气泡对话与快捷选项
 1. **生成方案**（`POST /api/ai/draft`）
    - 提示词在 `server/src/ai/draft.ts` 的 `buildDraftPrompt()`
    - 模型输出由 `parseDraft()` 清洗：去代码块、截取 JSON、类型兜底、越界卷号归零、超量截断

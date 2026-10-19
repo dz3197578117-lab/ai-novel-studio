@@ -44,6 +44,19 @@ export const writeRequest = z.object({
   memoryBudget: z.number().int().min(500).max(50_000).optional(),
 });
 
+/** 对话式需求访谈 */
+export const interviewRequest = z.object({
+  messages: z
+    .array(
+      z.object({
+        role: z.enum(['user', 'assistant']),
+        content: z.string().min(1).max(2000),
+      }),
+    )
+    .min(1, '至少需要一条消息')
+    .max(20),
+});
+
 /** 一套模型配置 */
 export const profileInput = z.object({
   name: z.string().min(1, '给这套配置起个名字').max(60),

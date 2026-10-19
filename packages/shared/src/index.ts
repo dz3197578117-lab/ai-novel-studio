@@ -210,6 +210,24 @@ export interface ChatMessage {
 
 // ─────────────────────────── AI 生成整本小说 ───────────────────────────
 
+/** 对话式需求访谈中的一条消息 */
+export interface InterviewMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** AI 在访谈中的一步回应 */
+export interface InterviewReply {
+  /** 给用户看的话（可能是一个问题，也可能是确认） */
+  say: string;
+  /** 可直接点选的快捷选项，没有则为空数组 */
+  options: string[];
+  /** 是否已经聊清楚、可以生成方案了 */
+  done: boolean;
+  /** done 为 true 时，供下游生成方案用的完整需求描述 */
+  brief: string;
+}
+
 /** 用户对想要的小说提出的需求 */
 export interface DraftRequest {
   /** 自由描述：想写什么故事 */

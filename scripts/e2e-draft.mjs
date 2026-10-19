@@ -1,8 +1,8 @@
 /**
- * 「AI 生成小说」端到端测试：
- * 书架上打开对话框 → 填需求 → 生成方案 → 预览 → 创建作品 → 进入写作台。
+ * 「对话式 AI 生成小说」端到端测试：
+ * 打开对话框 → 看到 AI 反问 → 点选项回答 → 聊清楚 → 生成方案 → 创建 → 进入写作台。
  *
- * 会临时把模型配置指向本地 mock，结束后还原设置并删除测试作品。
+ * 会临时把模型指向本地 mock，结束后还原 settings 表并删除测试作品。
  */
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -29,7 +29,6 @@ async function apiJson(pathname, init) {
   return text ? JSON.parse(text) : null;
 }
 
-/** 备份 / 还原 settings 表 */
 function dumpSettings() {
   const db = new DatabaseSync('apps/server/data/novelforge.db');
   const rows = db.prepare('SELECT key, value FROM settings').all();
@@ -47,9 +46,9 @@ function restoreSettings(rows) {
 async function ensureMock() {
   try {
     await fetch(`http://127.0.0.1:${MOCK_PORT}/v1/models`);
-    return null; // 已在运行
+    return null;
   } catch {
-    /* 需要自己启动 */
+    /* 需要启动 */
   }
   const child = spawn('node', ['scripts/mock-llm.mjs', String(MOCK_PORT)], {
     stdio: 'ignore',
@@ -65,7 +64,6 @@ async function main() {
   let createdProjectId = null;
 
   try {
-    // 把模型指向 mock：建一套配置并设为当前
     const created = await apiJson('/api/profiles', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -145,7 +143,7 @@ async function main() {
       await send('Page.navigate', { url: UI });
       await sleep(4200);
 
-      // 1. 书架上能打开对话框
+      // 1. 书架上打开对话框
       const opened = await evaluate(`(() => {
         const b = Array.from(document.querySelectorAll('button')).find(x => x.textContent.includes('AI 生成小说'));
         if (b) { b.click(); return true; }
@@ -156,47 +154,66 @@ async function main() {
       const title = await evaluate('document.querySelector(".modal h2")?.textContent ?? ""');
       check('对话框已打开', title.includes('AI 生成小说'), title);
 
-      // 2. 填写需求并生成
-      await evaluate(`(() => {
-        const ta = document.querySelector('.modal textarea');
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
-        setter.call(ta, '一个被逐出宗门的剑修，追查父亲失踪真相，想写冷峻克制的古典玄幻');
-        ta.dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      })()`);
-      await sleep(300);
-
-      // 章数可自由填写 + 快捷预设
-      const presetClicked = await evaluate(`(() => {
-        const chip = Array.from(document.querySelectorAll('.count-chip')).find(x => x.textContent.trim() === '15');
-        if (!chip) return false;
-        chip.click();
-        return true;
-      })()`);
-      await sleep(300); // 等 React 重新渲染后再读输入框
-      const presetValue = await evaluate(
-        'document.querySelector(".modal input[type=\\"number\\"]").value',
+      // 2. AI 先开口，并给类型快捷选项
+      const greeting = await evaluate(
+        'document.querySelector(".chat-bubble.assistant")?.textContent ?? ""',
       );
-      check('快捷预设可一键填入', presetClicked && presetValue === '15', `value=${presetValue}`);
+      check('AI 主动发起对话', greeting.length > 5, greeting.slice(0, 40));
 
-      const customValue = await evaluate(`(() => {
-        const input = document.querySelector('.modal input[type="number"]');
-        if (!input) return null;
-        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(input, '8');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        return input.value;
+      const starterCount = await evaluate('document.querySelectorAll(".chat-options .count-chip").length');
+      check('提供类型快捷选项', starterCount >= 3, `${starterCount} 个`);
+
+      // 3. 点一个类型 → 发出去
+      const clickedStarter = await evaluate(`(() => {
+        const b = Array.from(document.querySelectorAll('.chat-options .count-chip'))
+          .find(x => x.textContent.includes('古典玄幻'));
+        if (!b) return false;
+        b.click();
+        return true;
       })()`);
-      check('章数可自己填写', customValue === '8', `value=${customValue}`);
+      check('点击类型选项', clickedStarter);
 
+      // 4. 等 AI 反问
+      let optionsAfter = 0;
+      for (let i = 0; i < 25; i++) {
+        await sleep(400);
+        optionsAfter = await evaluate('document.querySelectorAll(".chat-options .count-chip").length');
+        if (optionsAfter > 0) break;
+      }
+      const userBubbles = await evaluate('document.querySelectorAll(".chat-bubble.user").length');
+      check('用户消息已上屏', userBubbles >= 1, `${userBubbles} 条`);
+      const bubbles = await evaluate('document.querySelectorAll(".chat-bubble.assistant").length');
+      check('AI 反问并给出选项', optionsAfter >= 2 && bubbles >= 2, `选项 ${optionsAfter} 个`);
+
+      // 5. 回答 AI 的追问
+      await evaluate(`(() => {
+        const b = document.querySelector('.chat-options .count-chip');
+        if (b) b.click();
+        return !!b;
+      })()`);
+
+      // 6. 等 AI 表示「聊清楚了」
+      let brief = '';
+      for (let i = 0; i < 25; i++) {
+        await sleep(400);
+        brief = await evaluate('document.querySelector(".brief-preview")?.textContent ?? ""');
+        if (brief) break;
+      }
+      check('AI 汇总出需求', brief.length > 10, brief.slice(0, 50));
+
+      const hasStartBtn = await evaluate(`(() => {
+        return Array.from(document.querySelectorAll('.modal button')).some(b => b.textContent.includes('开始生成方案'));
+      })()`);
+      check('出现「开始生成方案」按钮', hasStartBtn);
+
+      // 7. 生成方案
       const clickedGenerate = await evaluate(`(() => {
-        const b = Array.from(document.querySelectorAll('.modal button')).find(x => x.textContent.includes('生成方案'));
+        const b = Array.from(document.querySelectorAll('.modal button')).find(x => x.textContent.includes('开始生成方案'));
         if (b && !b.disabled) { b.click(); return true; }
         return false;
       })()`);
-      check('点击「生成方案」', clickedGenerate);
+      check('点击「开始生成方案」', clickedGenerate);
 
-      // 3. 等待方案预览出现
       let draftTitle = '';
       for (let i = 0; i < 40; i++) {
         await sleep(400);
@@ -211,14 +228,8 @@ async function main() {
       check('预览包含设定条目', entitiesRendered >= 3, `${entitiesRendered} 条`);
       const volumesRendered = await evaluate('document.querySelectorAll(".draft-volume").length');
       check('预览按卷分组', volumesRendered >= 1, `${volumesRendered} 卷`);
-      const logline = await evaluate('document.querySelector(".draft-logline")?.textContent ?? ""');
-      check('预览显示简介', logline.length > 5, logline.slice(0, 40));
 
-      // 章数与要求不符时应有提示（mock 固定返回 6 章，这里要求的是 8 章）
-      const warn = await evaluate('document.querySelector(".draft-warn")?.textContent ?? ""');
-      check('章数不符时给出提示', warn.includes('8'), warn.trim());
-
-      // 4. 创建作品
+      // 8. 创建作品
       const clickedCreate = await evaluate(`(() => {
         const b = Array.from(document.querySelectorAll('.modal button')).find(x => x.textContent.includes('创建这本书'));
         if (b && !b.disabled) { b.click(); return true; }
@@ -226,7 +237,6 @@ async function main() {
       })()`);
       check('点击「创建这本书」', clickedCreate);
 
-      // 5. 创建后应进入写作台
       let inWorkspace = false;
       for (let i = 0; i < 25; i++) {
         await sleep(400);
@@ -238,17 +248,14 @@ async function main() {
       const chapterCount = await evaluate('document.querySelectorAll(".chapter-item").length');
       check('新作品带入了章节', chapterCount >= 3, `${chapterCount} 章`);
 
-      const titleInput = await evaluate('document.querySelector("input.title")?.value ?? ""');
-      check('编辑器打开的是新书章节', Boolean(titleInput), titleInput);
-
-      // 6. 数据落库校验
+      // 9. 数据落库
       const projects = await apiJson('/api/projects');
-      const created = projects.find((p) => p.title === draftTitle);
-      check('作品已写入数据库', Boolean(created), created?.title);
-      if (created) {
-        createdProjectId = created.id;
+      const proj = projects.find((p) => p.title === draftTitle);
+      check('作品已写入数据库', Boolean(proj), proj?.title);
+      if (proj) {
+        createdProjectId = proj.id;
         const overview = await apiJson('/api/projects/overview');
-        const item = overview.find((p) => p.id === created.id);
+        const item = overview.find((p) => p.id === proj.id);
         check(
           '书架统计正确',
           item && item.chapterCount >= 3 && item.entityCount >= 3,

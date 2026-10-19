@@ -118,20 +118,38 @@ const server = http.createServer((req, res) => {
 
       // 「策划一部小说」的请求返回方案 JSON，其余返回正文
       const isDraftRequest = /网络小说策划/.test(system?.content ?? '');
-      console.log('is draft request:', isDraftRequest);
+      // 对话式访谈：第一轮反问，第二轮给结论
+      const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
+      const userTurns = (String(lastUser?.content ?? '').match(/用户：/g) ?? []).length;
+      console.log('is draft request:', isDraftRequest, '| is interview:', isInterviewRequest, '| turns:', userTurns);
+
+      let content = SAMPLE.join('');
+      if (isDraftRequest) {
+        content = JSON.stringify(DRAFT_SAMPLE);
+      } else if (isInterviewRequest) {
+        content = JSON.stringify(
+          userTurns <= 1
+            ? {
+                say: '你想写哪种类型的小说？先定个大方向，我来帮你细化。',
+                options: ['古典玄幻', '都市悬疑', '科幻末世'],
+                done: false,
+                brief: '',
+              }
+            : {
+                say: '明白了，我按这个方向出一版方案。',
+                options: [],
+                done: true,
+                brief:
+                  '古典玄幻长篇。主角是被逐出宗门的剑修，为洗清父亲冤屈重返北域，追查中发现真凶就在宗门内部。基调冷峻克制，白描为主，适合长篇连载。',
+              },
+        );
+      }
 
       if (!stream) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
-            choices: [
-              {
-                message: {
-                  role: 'assistant',
-                  content: isDraftRequest ? JSON.stringify(DRAFT_SAMPLE) : SAMPLE.join(''),
-                },
-              },
-            ],
+            choices: [{ message: { role: 'assistant', content } }],
             usage: { prompt_tokens: 100, completion_tokens: 50 },
           }),
         );

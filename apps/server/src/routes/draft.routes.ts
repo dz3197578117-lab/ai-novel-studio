@@ -1,16 +1,66 @@
 import type { FastifyInstance } from 'fastify';
-import type { NovelDraft, Project } from '@novelforge/shared';
+import type { InterviewMessage, NovelDraft, Project } from '@novelforge/shared';
 import { buildDraftPrompt, parseDraft } from '../ai/draft.js';
+import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js';
 import { AiError, complete, loadTextConfig } from '../ai/client.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import { createChapter, createVolume } from '../repos/chapters.repo.js';
-import { draftRequestSchema, novelDraftSchema } from './schemas.js';
+import { draftRequestSchema, interviewRequest, novelDraftSchema } from './schemas.js';
 
 /** 整本小说生成最长等待时间：大模型出 10-30 章方案可能要一分多钟 */
 const DRAFT_TIMEOUT_MS = 150_000;
+/** 单轮对话应该很快 */
+const INTERVIEW_TIMEOUT_MS = 60_000;
 
 export async function draftRoutes(app: FastifyInstance): Promise<void> {
+  /**
+   * 对话式需求访谈：AI 反问类型/主角/基调/篇幅，聊清楚后返回 brief。
+   * 返回 done=true 后，前端再调 /api/ai/draft 生成方案。
+   */
+  app.post('/api/ai/interview', async (req, reply) => {
+    const parsed = interviewRequest.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '参数校验失败',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    const prompt = buildInterviewPrompt(parsed.data.messages as InterviewMessage[]);
+    try {
+      const raw = await complete(
+        config,
+        [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        AbortSignal.timeout(INTERVIEW_TIMEOUT_MS),
+      );
+      return parseInterviewResponse(raw);
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(502).send({ error: 'interview_failed', message: e.message });
+      }
+      const msg =
+        (e as Error).name === 'TimeoutError'
+          ? '对话超时（超过 60 秒），请重试。'
+          : `对话失败：${(e as Error).message}`;
+      return reply.code(502).send({ error: 'interview_failed', message: msg });
+    }
+  });
+
   /**
    * 根据需求生成小说方案（不落库）。
    * 返回后由用户确认，再调 /api/projects/from-draft 创建。
