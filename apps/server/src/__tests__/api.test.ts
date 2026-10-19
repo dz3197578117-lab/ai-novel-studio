@@ -619,6 +619,24 @@ describe('AI 生成目录（已有作品）', () => {
   });
 });
 
+describe('项目硬约束', () => {
+  test('硬约束可保存并读回', async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '硬约束测试' })).body);
+    const rules = '1. 清代制度，皇子份例由内务府供给\n2. 不得出现火器';
+    const patched = await patch(`/api/projects/${p.id}`, { rules });
+    assert.equal(patched.statusCode, 200);
+    assert.equal(JSON.parse(patched.body).rules, rules);
+
+    const got = JSON.parse((await get(`/api/projects/${p.id}`)).body);
+    assert.equal(got.rules, rules);
+  });
+
+  test('新建项目时硬约束默认空', async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '默认空规则' })).body);
+    assert.equal(p.rules, '');
+  });
+});
+
 describe('大纲/细纲提问与整改', () => {
   let projectId = '';
   let chapterId = '';

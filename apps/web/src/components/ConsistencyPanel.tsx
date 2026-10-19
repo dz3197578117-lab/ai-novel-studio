@@ -11,7 +11,7 @@ import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import { Modal } from './Modal';
 
-type Tab = 'brainstorm' | 'foreshadow' | 'timeline' | 'knowledge' | 'toc' | 'check';
+type Tab = 'rules' | 'brainstorm' | 'foreshadow' | 'timeline' | 'knowledge' | 'toc' | 'check';
 
 interface TocPlan {
   volumes: { title: string; summary: string }[];
@@ -37,6 +37,7 @@ const KIND_LABEL: Record<string, string> = {
   naming: '称呼',
   plot: '情节',
   foreshadow: '伏笔',
+  history: '史实/制度',
   other: '其它',
 };
 
@@ -56,6 +57,8 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
 
   // 脑暴板
   const [brainstorm, setBrainstorm] = useState('');
+  /** 项目级硬约束（考据规则/制度/禁令），每次生成都会注入 */
+  const [rulesText, setRulesText] = useState('');
 
   // 知识库
   const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
@@ -122,6 +125,7 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
       setTimeline(tl);
       setDocs(ds);
       setBrainstorm(project.brainstorm ?? '');
+      setRulesText(project.rules ?? '');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -129,7 +133,7 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
 
   useEffect(() => {
     if (!open) return;
-    setTab('brainstorm');
+    setTab('rules');
     setReport(null);
     setQuery('');
     setHits([]);
@@ -143,6 +147,20 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     try {
       await api.patch(`/api/projects/${project!.id}`, { brainstorm });
       await useNovel.getState().selectProject(project!.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 保存硬约束（考据规则） */
+  async function saveRules() {
+    setBusy(true);
+    try {
+      await api.patch(`/api/projects/${project!.id}`, { rules: rulesText });
+      await useNovel.getState().selectProject(project!.id);
+      setError('硬约束已保存，之后每次生成都会带上');
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -467,6 +485,9 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   return (
     <Modal open={open} onClose={onClose} title="设定中心" wide>
       <div className="ai-tabs" style={{ padding: '0 0 10px', borderBottom: '1px solid var(--border)' }}>
+        <button className={tab === 'rules' ? 'active' : ''} onClick={() => setTab('rules')}>
+          🔒 硬约束
+        </button>
         <button className={tab === 'brainstorm' ? 'active' : ''} onClick={() => setTab('brainstorm')}>
           脑暴
         </button>
@@ -708,6 +729,39 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── 硬约束（考据规则） ── */}
+      {tab === 'rules' && (
+        <div className="settings-section">
+          <p className="hint" style={{ marginTop: 0 }}>
+            写在这里的规则**优先级最高**，每次生成正文、目录、大纲、整改都会强制带上，一致性检查也会按它判错。
+            适合写制度、考据、写作禁令这类「不能改的底线」。
+          </p>
+          <div className="field">
+            <textarea
+              rows={11}
+              value={rulesText}
+              onChange={(e) => setRulesText(e.target.value)}
+              placeholder={
+                '示例：\n' +
+                '1. 背景为清代，制度必须符合史实：皇子份例由内务府供给，不存在「向皇子收冬衣钱」。\n' +
+                '2. 太监勒索只能以「代办/垫付/门包」名义，不能写成官方收费。\n' +
+                '3. 皇子未封爵时无府邸、无账房，不得出现「王府账房」。\n' +
+                '4. 亮出皇子身份不会解决问题，只会招来更大麻烦。\n' +
+                '5. 主角不称帝、不改年号。'
+              }
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="hint" style={{ margin: 0 }}>
+              {rulesText.trim() ? `已写 ${rulesText.trim().length} 字` : '还没写硬约束'}
+            </span>
+            <button className="primary" onClick={() => void saveRules()} disabled={busy}>
+              保存硬约束
+            </button>
+          </div>
         </div>
       )}
 
@@ -1020,7 +1074,9 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
       {tab === 'check' && (
         <div className="settings-section">
           <p className="hint" style={{ marginTop: 0 }}>
-            把设定、伏笔、时间线和最近章节一起交给 AI，找出人物突变、时间线矛盾、设定吃书、称呼不一致、伏笔有埋无收等问题。
+            把设定、硬约束、伏笔、时间线、知识库资料和最近章节一起交给 AI，检查：人物突变、时间线矛盾、
+            设定吃书、称呼不一致、情节逻辑硬伤、伏笔有埋无收，以及**史实/制度/常识错误**（如官制、称谓、
+            器物、银钱、办事流程）。
           </p>
 
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>

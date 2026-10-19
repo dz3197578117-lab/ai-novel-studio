@@ -28,6 +28,8 @@ export interface ConsistencyInput {
   chapters: Chapter[];
   foreshadows: Foreshadow[];
   timeline: TimelineEvent[];
+  /** 知识库资料（用标题做参考目录，让模型按作者提供的史实/资料校对） */
+  knowledge?: { title: string; source: string; excerpt?: string }[];
 }
 
 export function buildConsistencyPrompt(input: ConsistencyInput): {
@@ -35,7 +37,14 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
   user: string;
   scope: ConsistencyReport['scope'];
 } {
-  const { project, entities, chapters, foreshadows, timeline } = input;
+  const { project, entities, chapters, foreshadows, timeline, knowledge = [] } = input;
+
+  const rules = (project.rules ?? '').trim();
+  const knowledgeText = knowledge.length
+    ? knowledge
+        .map((k) => `- ${k.title}${k.source ? `（${k.source}）` : ''}${k.excerpt ? `：${k.excerpt}` : ''}`)
+        .join('\n')
+    : '';
 
   const entityLines = entities
     .slice(0, 40)
@@ -86,8 +95,14 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 2. timeline —— 时间线是否矛盾（先后顺序、季节、年龄）
 3. setting —— 是否与世界观/设定条目冲突（吃书）
 4. naming —— 人名、地名、称呼是否前后不一致
-5. plot —— 情节是否有逻辑硬伤
+5. plot —— 情节是否有逻辑硬伤（因果不成立、动机不足、能力越界）
 6. foreshadow —— 伏笔是否有埋无收、或回收方式与铺垫矛盾
+7. history —— 是否符合作者硬约束、史实、制度与常识（官制、称谓、礼仪、器物、银钱数目、办事流程）
+
+对 history 维度要特别严格：
+- 如果作者写了「硬约束」，任何与之冲突的情节都算 high
+- 如果故事有明确历史背景，制度性错误（例如「朝廷向皇子收冬衣钱」「皇子亮腰牌就能压住京兆府」）算 high
+- 拿不准是否史实时，用 severity=low 并在 detail 里说明「需作者确认」，不要武断
 
 只输出一个 JSON 对象，不要解释，不要 markdown 代码块：
 {
@@ -110,6 +125,8 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 简介：${project.logline || '（无）'}
 题材：${project.genre || '（无）'}
 文风要求：${project.styleGuide || '（无）'}
+${rules ? `\n## 作者硬约束（最高优先级，违反即算错误）\n${rules}` : ''}
+${knowledgeText ? `\n## 作者提供的参考资料（可据此校对史实/制度）\n${knowledgeText}` : ''}
 
 ## 设定条目（共 ${entities.length} 条，节选前 40 条）
 ${entityLines || '（暂无）'}
@@ -147,6 +164,7 @@ const KINDS = new Set([
   'naming',
   'plot',
   'foreshadow',
+  'history',
   'other',
 ]);
 const SEVERITIES = new Set(['low', 'medium', 'high']);

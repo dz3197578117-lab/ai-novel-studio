@@ -1,5 +1,6 @@
 import { listEntities } from '../repos/entities.repo.js';
 import { listOpenForeshadows, listTimeline } from '../repos/consistency.repo.js';
+import { getProject } from '../repos/projects.repo.js';
 
 const TYPE_LABEL: Record<string, string> = {
   world: '世界观',
@@ -16,6 +17,9 @@ const TYPE_LABEL: Record<string, string> = {
  * 为什么需要：正文写作的上下文（ai/context.ts）本来就会注入设定，
  * 但生成大纲的那几条链路没接，导致模型凭空造人物、造势力，
  * 大纲和设定对不上。规划阶段同样必须知道「这个世界里谁存在」。
+ *
+ * 顺序有讲究：作者硬约束（rules）→ 设定条目 → 伏笔 → 时间线。
+ * 前面的优先级更高，后面的不能与之冲突。
  */
 export function buildSettingBrief(
   projectId: string,
@@ -30,6 +34,14 @@ export function buildSettingBrief(
     .slice(0, maxTimeline);
 
   const parts: string[] = [];
+
+  // 作者写死的硬约束放最前面：制度、考据、禁令，优先级高于一切推断
+  const rules = getProject(projectId)?.rules?.trim();
+  if (rules) {
+    parts.push(
+      `## 作者硬约束（最高优先级：违反即视为写错，不要用常识或想象去改它）\n${rules}`,
+    );
+  }
 
   if (entities.length) {
     parts.push(

@@ -60,6 +60,12 @@ export function buildContext(params: {
 
   const blocks: string[] = [];
 
+  // 0. 作者硬约束（考据规则 / 制度 / 禁令）——最高优先级
+  if (project.rules?.trim()) {
+    blocks.push(`## 作者硬约束（必须遵守，违反即算写错）\n${project.rules.trim()}`);
+    memoryUsed.push({ kind: 'style', label: '作者硬约束', chars: project.rules.length });
+  }
+
   // 1. 固定设定（人物/世界观等）
   const pinned = listPinnedEntities(project.id);
   if (pinned.length > 0) {

@@ -12,6 +12,7 @@ import {
 } from '../repos/consistency.repo.js';
 import { listChapters, getChapter } from '../repos/chapters.repo.js';
 import { listEntities } from '../repos/entities.repo.js';
+import { listDocs } from '../repos/layers.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { buildConsistencyPrompt, parseConsistencyReport } from '../ai/consistency.js';
@@ -117,6 +118,11 @@ export async function consistencyRoutes(app: FastifyInstance): Promise<void> {
         chapters,
         foreshadows: listForeshadows(project.id),
         timeline: listTimeline(project.id),
+        knowledge: listDocs(project.id).map((d) => ({
+          title: d.title,
+          source: d.source,
+          excerpt: d.content.slice(0, 200),
+        })),
       });
 
       try {

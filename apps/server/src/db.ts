@@ -182,6 +182,12 @@ function migrate(d: DatabaseSync): void {
     version = 3;
   }
 
+  if (version < 4) {
+    // 项目级硬约束：考据规则、制度设定、写作禁令（每次生成都会注入）
+    d.exec(`ALTER TABLE projects ADD COLUMN rules TEXT NOT NULL DEFAULT '';`);
+    version = 4;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
 }
 

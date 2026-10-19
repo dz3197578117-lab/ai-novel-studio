@@ -8,6 +8,7 @@ export const projectInput = z.object({
   status: z.enum(['drafting', 'paused', 'finished', 'archived']).optional(),
   styleGuide: z.string().max(4000).optional(),
   brainstorm: z.string().max(100_000).optional(),
+  rules: z.string().max(50_000).optional(),
 });
 
 export const entityInput = z.object({

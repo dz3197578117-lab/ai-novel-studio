@@ -42,6 +42,11 @@ export interface Project extends Timestamped {
   styleGuide: string;
   /** 脑暴板：零散的灵感、点子、聊天记录（Markdown） */
   brainstorm?: string;
+  /**
+   * 硬约束（考据规则 / 制度设定 / 写作禁令）。
+   * 与「设定条目」不同：这里是作者写死的规则，每次生成和检查都会强制带上。
+   */
+  rules?: string;
 }
 
 /** 作品库列表项：附统计信息，供「小说管理」视图使用 */
@@ -338,6 +343,7 @@ export type IssueKind =
   | 'naming'       // 称呼/姓名不一致
   | 'plot'         // 情节逻辑
   | 'foreshadow'   // 伏笔问题
+  | 'history'      // 史实 / 制度 / 常识错误
   | 'other';
 
 export interface ConsistencyIssue {

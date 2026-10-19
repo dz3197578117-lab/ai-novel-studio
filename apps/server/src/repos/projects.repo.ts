@@ -1,4 +1,4 @@
-import type { Project, ProjectOverview, ProjectStatus, ID } from '@novelforge/shared';
+﻿import type { Project, ProjectOverview, ProjectStatus, ID } from '@novelforge/shared';
 import { getDb, newId, nowIso } from '../db.js';
 
 interface ProjectRow {
@@ -10,6 +10,7 @@ interface ProjectRow {
   status: ProjectStatus;
   style_guide: string;
   brainstorm: string | null;
+  rules: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -24,6 +25,7 @@ function toProject(r: ProjectRow): Project {
     status: r.status,
     styleGuide: r.style_guide,
     brainstorm: r.brainstorm ?? '',
+    rules: r.rules ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -84,6 +86,7 @@ export interface ProjectInput {
   status?: ProjectStatus;
   styleGuide?: string;
   brainstorm?: string;
+  rules?: string;
 }
 
 export function createProject(input: ProjectInput): Project {
@@ -91,8 +94,8 @@ export function createProject(input: ProjectInput): Project {
   const id = newId();
   const ts = nowIso();
   db.prepare(
-    `INSERT INTO projects (id, title, logline, genre, target_words, status, style_guide, brainstorm, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO projects (id, title, logline, genre, target_words, status, style_guide, brainstorm, rules, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     id,
     input.title,
@@ -102,6 +105,7 @@ export function createProject(input: ProjectInput): Project {
     input.status ?? 'drafting',
     input.styleGuide ?? '',
     input.brainstorm ?? '',
+    input.rules ?? '',
     ts,
     ts,
   );
@@ -113,7 +117,7 @@ export function updateProject(id: ID, patch: Partial<ProjectInput>): Project | n
   if (!cur) return null;
   getDb()
     .prepare(
-      `UPDATE projects SET title=?, logline=?, genre=?, target_words=?, status=?, style_guide=?, brainstorm=?, updated_at=? WHERE id=?`,
+      `UPDATE projects SET title=?, logline=?, genre=?, target_words=?, status=?, style_guide=?, brainstorm=?, rules=?, updated_at=? WHERE id=?`,
     )
     .run(
       patch.title ?? cur.title,
@@ -123,6 +127,7 @@ export function updateProject(id: ID, patch: Partial<ProjectInput>): Project | n
       patch.status ?? cur.status,
       patch.styleGuide ?? cur.styleGuide,
       patch.brainstorm ?? cur.brainstorm ?? '',
+      patch.rules ?? cur.rules ?? '',
       nowIso(),
       id,
     );
@@ -137,3 +142,4 @@ export function deleteProject(id: ID): boolean {
 export function touchProject(id: ID): void {
   getDb().prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(nowIso(), id);
 }
+

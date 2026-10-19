@@ -75,6 +75,60 @@ test('parseConsistencyReport 能救回被截断的结果', () => {
   assert.ok(r.issues.length >= 1);
 });
 
+test('buildConsistencyPrompt 带上硬约束、知识库与范围', () => {
+  const project = {
+    id: 'p1',
+    title: '孤的肥皂',
+    logline: '穿越皇子制皂',
+    genre: '历史',
+    styleGuide: '冷峻',
+    rules: '皇子份例由内务府供给，不存在向皇子收冬衣钱。',
+    targetWords: 0,
+    status: 'drafting',
+    createdAt: '',
+    updatedAt: '',
+  } as Project;
+
+  const p = buildConsistencyPrompt({
+    project,
+    entities: [],
+    chapters: [
+      {
+        id: 'c1',
+        projectId: 'p1',
+        volumeId: null,
+        title: '第一章 · 冷院醒来',
+        order: 0,
+        outline: '太监来收冬衣钱',
+        beats: '',
+        content: '正文',
+        status: 'drafting',
+        wordCount: 2,
+        summary: '',
+        createdAt: '',
+        updatedAt: '',
+      } as Chapter,
+    ],
+    foreshadows: [],
+    timeline: [],
+    knowledge: [{ title: '清代皇子待遇', source: '史实.md', excerpt: '份例由内务府供给' }],
+  });
+
+  assert.match(p.user, /作者硬约束/);
+  assert.match(p.user, /不存在向皇子收冬衣钱/);
+  assert.match(p.user, /清代皇子待遇/);
+  assert.match(p.system, /history/);
+  assert.match(p.system, /制度性错误/);
+});
+
+test('parseConsistencyReport 接受 history 类型', () => {
+  const raw = JSON.stringify({
+    issues: [{ kind: 'history', severity: 'high', title: '制度错误', detail: 'd', suggestion: 's' }],
+  });
+  const r = parseConsistencyReport(raw, scope);
+  assert.equal(r.issues[0]!.kind, 'history');
+});
+
 test('buildConsistencyPrompt 带上设定/伏笔/时间线与范围', () => {
   const project = {
     id: 'p1',
