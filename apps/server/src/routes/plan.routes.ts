@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { buildPlanRevisePrompt, cleanPlanOutput } from '../ai/plan.js';
+import { buildSettingBrief } from '../ai/briefing.js';
 import { getChapter, listChapters } from '../repos/chapters.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { listOpenForeshadows } from '../repos/consistency.repo.js';
@@ -57,6 +58,7 @@ export async function planRoutes(app: FastifyInstance): Promise<void> {
       prev,
       next,
       openForeshadows: listOpenForeshadows(project.id, 8).map((f) => f.title),
+      settingBrief: buildSettingBrief(project.id, { maxEntities: 30 }),
       instruction,
     });
 

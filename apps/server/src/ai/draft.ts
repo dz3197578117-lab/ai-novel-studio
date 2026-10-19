@@ -577,8 +577,11 @@ export function buildOutlineFillPrompt(params: {
   idea: string;
   chapters: { number: number; title: string }[];
   contextAround: string;
+  /** 设定库摘要（人物/势力/地点/伏笔/时间线），用于约束大纲 */
+  settingBrief?: string;
 }): { system: string; user: string } {
-  const { projectTitle, logline, genre, styleGuide, idea, chapters, contextAround } = params;
+  const { projectTitle, logline, genre, styleGuide, idea, chapters, contextAround, settingBrief } =
+    params;
 
   const system = `你在为已有的章节标题补写大纲。
 
@@ -589,11 +592,14 @@ export function buildOutlineFillPrompt(params: {
 - index 必须与给定列表的序号严格对应，不要漏、不要换序
 - 大纲要具体到事件，不要写「推动剧情」「展现性格」这类空话
 - 要和已有章节的走向承接，不要重复已写内容
+- **人物、势力、地点必须来自下方「设定」，不要发明设定里没有的名字**
+- 如果设定里没有合适的人来推动情节，就用设定里已有的角色，或写「路人/店员/同学」这类泛称，不要起新名字
+- 不要与「已确定的时间线」冲突
 
 作品：《${projectTitle}》｜题材：${genre || '未定'}｜文风：${styleGuide || '自然流畅'}
 ${logline ? `简介：${logline}` : ''}`;
 
-  const user = `## 全书设定
+  const user = `${settingBrief ? `${settingBrief}\n\n` : ''}## 全书设定
 ${idea || '（无）'}
 
 ## 前后文参考

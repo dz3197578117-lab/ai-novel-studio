@@ -7,7 +7,7 @@ import {
   parseSceneCards,
   scenesToText,
 } from '../ai/layers.js';
-import { buildTitleBatchPrompt, parseOutlineFill } from '../ai/draft.js';
+import { buildOutlineFillPrompt, buildTitleBatchPrompt, parseOutlineFill } from '../ai/draft.js';
 import { chunkText } from '../repos/layers.repo.js';
 
 const project = {
@@ -161,4 +161,21 @@ test('parseOutlineFill 按 index 对齐', () => {
 
 test('parseOutlineFill 对非法输入报错', () => {
   assert.throws(() => parseOutlineFill('没有 JSON'), /没有返回可解析/);
+});
+
+test('补大纲提示词带设定约束，禁止发明人物', () => {
+  const settingBrief = '## 设定（硬约束）\n- [人物] 沈青梧：面馆老板娘';
+  const p = buildOutlineFillPrompt({
+    projectTitle: '雪山面馆',
+    logline: '隐世剑修开面馆',
+    genre: '武侠',
+    styleGuide: '冷峻',
+    idea: '',
+    settingBrief,
+    chapters: [{ number: 1, title: '第1章 · 开店' }],
+    contextAround: '',
+  });
+  assert.match(p.user, /沈青梧/);
+  assert.match(p.system, /不要发明设定里没有的名字/);
+  assert.match(p.system, /时间线/);
 });

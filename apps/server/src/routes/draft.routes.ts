@@ -31,6 +31,7 @@ import {
 import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js';
 import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { createJob, getJob, patchJob, runJob } from '../services/jobs.js';
+import { buildSettingBrief } from '../ai/briefing.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import {
@@ -399,6 +400,10 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
             .join('、')}`
         : '',
       parsed.data.instruction ? `额外要求：${parsed.data.instruction}` : '',
+      (() => {
+        const brief = buildSettingBrief(project.id);
+        return brief ? `作品现有设定（新目录必须与之相符）：\n${brief}` : '';
+      })(),
     ].filter(Boolean);
 
     const request = {
@@ -493,6 +498,10 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       project.logline ? `简介：${project.logline}` : '',
       project.genre ? `题材：${project.genre}` : '',
       project.brainstorm ? `作者想法：${project.brainstorm.slice(0, 1500)}` : '',
+      (() => {
+        const brief = buildSettingBrief(project.id);
+        return brief ? `作品现有设定（本卷不能与之冲突）：\n${brief}` : '';
+      })(),
     ]
       .filter(Boolean)
       .join('\n');
@@ -687,6 +696,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     runJob(job, async () => {
       let done = 0;
       const failed: string[] = [];
+      const settingBrief = buildSettingBrief(project.id);
       for (let i = 0; i < targets.length; i += batchSize) {
         const batch = targets.slice(i, i + batchSize);
         const prompt = buildOutlineFillPrompt({
@@ -695,6 +705,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
           genre: project.genre,
           styleGuide: project.styleGuide,
           idea,
+          settingBrief,
           chapters: batch.map((c) => ({
             number: all.findIndex((x) => x.id === c.id) + 1,
             title: c.title,
@@ -770,6 +781,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       logline: project.logline,
       genre: project.genre,
       styleGuide: project.styleGuide,
+      settingBrief: buildSettingBrief(project.id, { maxEntities: 30 }),
       idea: [
         project.logline,
         project.genre,

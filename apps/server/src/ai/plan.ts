@@ -15,12 +15,16 @@ export function buildPlanRevisePrompt(params: {
   next?: Chapter | null;
   openForeshadows: string[];
   instruction: string;
+  /** 设定库摘要，整改时必须遵守 */
+  settingBrief?: string;
 }): { system: string; user: string } {
-  const { mode, field, project, chapter, prev, next, openForeshadows, instruction } = params;
+  const { mode, field, project, chapter, prev, next, openForeshadows, instruction, settingBrief } =
+    params;
   const fieldName = field === 'outline' ? '本章大纲' : '本章细纲（节拍）';
   const current = (field === 'outline' ? chapter.outline : chapter.beats ?? '').trim();
 
   const context = [
+    settingBrief ?? '',
     `## 作品`,
     `书名：${project.title}`,
     project.genre ? `题材：${project.genre}` : '',
@@ -59,6 +63,7 @@ export function buildPlanRevisePrompt(params: {
 硬性规则：
 - 只输出修改后的${fieldName}正文，不要任何解释、前言、markdown 代码块
 - 保留作者原有的设定与已发生的情节，不要凭空改设定
+- **涉及的人物/势力/地点必须来自「设定」，不要发明设定之外的名字**
 - 必须与上一章衔接、为下一章留落点
 ${
   field === 'outline'
