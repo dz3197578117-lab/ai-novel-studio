@@ -65,20 +65,20 @@ async function main() {
   let createdProjectId = null;
 
   try {
-    // 把模型指向 mock
-    await apiJson('/api/settings', {
-      method: 'PUT',
+    // 把模型指向 mock：建一套配置并设为当前
+    const created = await apiJson('/api/profiles', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        text: {
-          baseUrl: `http://127.0.0.1:${MOCK_PORT}/v1`,
-          apiKey: 'mock-key',
-          model: 'mock-model',
-          temperature: 0.8,
-          maxTokens: 4096,
-        },
+        name: 'E2E Mock',
+        baseUrl: `http://127.0.0.1:${MOCK_PORT}/v1`,
+        apiKey: 'mock-key',
+        model: 'mock-model',
+        temperature: 0.8,
+        maxTokens: 4096,
       }),
     });
+    await apiJson(`/api/profiles/${created.id}/activate`, { method: 'POST' });
 
     const profile = path.join(os.tmpdir(), `nf-draft-${Date.now()}`);
     const child = spawn(

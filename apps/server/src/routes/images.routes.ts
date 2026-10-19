@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { GeneratedImage, ImageProviderConfig } from '@novelforge/shared';
+import type { GeneratedImage } from '@novelforge/shared';
 import { getDb, newId, nowIso } from '../db.js';
 import { IMAGES_DIR } from '../config.js';
-import { getSetting } from '../repos/settings.repo.js';
+import { getImageConfig } from '../repos/settings.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { imageRequest } from './schemas.js';
 
@@ -49,7 +49,7 @@ export async function imageRoutes(app: FastifyInstance): Promise<void> {
         details: parsed.error.flatten(),
       });
     }
-    const cfg = getSetting<ImageProviderConfig>('image', { baseUrl: '', apiKey: '', model: '' });
+    const cfg = getImageConfig();
     if (!cfg.apiKey || !cfg.baseUrl) {
       return reply.code(412).send({
         error: 'not_configured',

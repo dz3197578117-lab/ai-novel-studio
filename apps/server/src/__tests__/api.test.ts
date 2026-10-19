@@ -405,61 +405,150 @@ describe('AI 生成小说', () => {
   });
 });
 
-describe('设置', () => {
-  test('读取时对 API Key 打码', async () => {
-    await app.inject({
-      method: 'PUT',
-      url: '/api/settings',
-      payload: {
-        text: {
-          baseUrl: 'https://api.deepseek.com/v1',
-          apiKey: 'sk-abcdefghijklmnop',
-          model: 'deepseek-chat',
-        },
-      },
-    });
-    const res = await get('/api/settings');
-    const s = JSON.parse(res.body);
-    assert.equal(s.hasTextKey, true);
-    assert.notEqual(s.text.apiKey, 'sk-abcdefghijklmnop');
-    assert.ok(s.text.apiKey.includes('••••'));
+describe('模型配置（多套）', () => {
+  test('首次读取会自动带出一个可填的默认配置', async () => {
+    const s = JSON.parse((await get('/api/settings')).body);
+    assert.ok(Array.isArray(s.profiles));
+    assert.ok(s.profiles.length >= 1, '至少有一个默认配置');
+    assert.ok(s.activeProfileId, '应自动选择一个当前配置');
   });
 
-  test('回传打码值不会覆盖真实 Key', async () => {
-    const before = JSON.parse((await get('/api/settings')).body);
-    await app.inject({
-      method: 'PUT',
-      url: '/api/settings',
-      payload: {
-        text: {
-          baseUrl: before.text.baseUrl,
-          apiKey: before.text.apiKey,
-          model: 'deepseek-reasoner',
-        },
-      },
+  test('新增配置，Key 打码返回', async () => {
+    const res = await post('/api/profiles', {
+      name: 'DeepSeek 官方',
+      baseUrl: 'https://api.deepseek.com/v1',
+      apiKey: 'sk-abcdefghijklmnop',
+      model: 'deepseek-chat',
     });
-    const after = JSON.parse((await get('/api/settings')).body);
-    assert.equal(after.hasTextKey, true);
-    assert.equal(after.text.model, 'deepseek-reasoner');
+    assert.equal(res.statusCode, 201);
+    const p = JSON.parse(res.body);
+    assert.equal(p.name, 'DeepSeek 官方');
+    assert.equal(p.hasApiKey, true);
+    assert.ok(!('apiKey' in p), '不应把真实 Key 返回给前端');
+    assert.ok(p.apiKeyMasked.includes('••••'));
+  });
+
+  test('可以存多套并切换当前配置', async () => {
+    const a = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '配置 A',
+          baseUrl: 'https://a.example.com/v1',
+          apiKey: 'sk-aaaa1111',
+          model: 'model-a',
+        })
+      ).body,
+    );
+    const b = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '配置 B',
+          baseUrl: 'https://b.example.com/v1',
+          apiKey: 'sk-bbbb2222',
+          model: 'model-b',
+        })
+      ).body,
+    );
+
+    await post(`/api/profiles/${b.id}/activate`);
+    let s = JSON.parse((await get('/api/settings')).body);
+    assert.equal(s.activeProfileId, b.id);
+
+    await post(`/api/profiles/${a.id}/activate`);
+    s = JSON.parse((await get('/api/settings')).body);
+    assert.equal(s.activeProfileId, a.id);
+    assert.equal(s.profiles.length >= 2, true);
+  });
+
+  test('编辑配置时回传打码值不会覆盖真实 Key', async () => {
+    const created = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '保留 Key 测试',
+          baseUrl: 'https://x.example.com/v1',
+          apiKey: 'sk-real-key-value',
+          model: 'm1',
+        })
+      ).body,
+    );
+    const patched = await patch(`/api/profiles/${created.id}`, {
+      name: '改了名字',
+      apiKey: created.apiKeyMasked, // 前端回显的掩码
+      model: 'm2',
+    });
+    assert.equal(patched.statusCode, 200);
+    const after = JSON.parse(patched.body);
+    assert.equal(after.name, '改了名字');
+    assert.equal(after.model, 'm2');
+    assert.equal(after.hasApiKey, true, 'Key 应仍然保留');
+  });
+
+  test('显式传空串可以清空 Key', async () => {
+    const created = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '清空 Key 测试',
+          baseUrl: 'https://y.example.com/v1',
+          apiKey: 'sk-to-be-cleared',
+          model: 'm1',
+        })
+      ).body,
+    );
+    const after = JSON.parse(
+      (await patch(`/api/profiles/${created.id}`, { apiKey: '' })).body,
+    );
+    assert.equal(after.hasApiKey, false);
+  });
+
+  test('删除当前配置后自动切换到下一个', async () => {
+    const p1 = JSON.parse(
+      (await post('/api/profiles', { name: '待删1', baseUrl: 'https://1.example.com', apiKey: 'k1', model: 'm' })).body,
+    );
+    const p2 = JSON.parse(
+      (await post('/api/profiles', { name: '待删2', baseUrl: 'https://2.example.com', apiKey: 'k2', model: 'm' })).body,
+    );
+    await post(`/api/profiles/${p2.id}/activate`);
+
+    const res = await del(`/api/profiles/${p2.id}`);
+    assert.equal(res.statusCode, 200);
+    const s = JSON.parse((await get('/api/settings')).body);
+    assert.ok(s.activeProfileId, '删除后仍应有一个当前配置');
+    assert.notEqual(s.activeProfileId, p2.id);
+    assert.ok(s.profiles.some((x: { id: string }) => x.id === p1.id));
+  });
+
+  test('缺少必填字段时拒绝新增', async () => {
+    const res = await post('/api/profiles', { name: '', baseUrl: 'x', model: 'y' });
+    assert.equal(res.statusCode, 400);
   });
 });
 
 describe('未配置模型时的写作接口', () => {
-  test('显式清空 API Key 后写作返回 412', async () => {
-    // 空串表示用户主动清空
-    await app.inject({
-      method: 'PUT',
-      url: '/api/settings',
-      payload: { text: { baseUrl: '', apiKey: '', model: '' } },
-    });
-    const s = JSON.parse((await get('/api/settings')).body);
-    assert.equal(s.hasTextKey, false, 'Key 应已被清空');
+  test('当前配置没有 Key 时写作返回 412', async () => {
+    // 造一个没有 Key 的配置并设为当前
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '无 Key 配置',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
 
-    const p = JSON.parse((await post('/api/projects', { title: '未配置' })).body);
-    const c = JSON.parse((await post(`/api/projects/${p.id}/chapters`, { title: 'c' })).body);
+    const s = JSON.parse((await get('/api/settings')).body);
+    const active = s.profiles.find((x: { id: string }) => x.id === s.activeProfileId);
+    assert.equal(active.hasApiKey, false);
+
+    const proj = JSON.parse((await post('/api/projects', { title: '未配置' })).body);
+    const ch = JSON.parse(
+      (await post(`/api/projects/${proj.id}/chapters`, { title: 'c' })).body,
+    );
     const res = await post('/api/write/stream', {
-      projectId: p.id,
-      chapterId: c.id,
+      projectId: proj.id,
+      chapterId: ch.id,
       mode: 'continue',
     });
     assert.equal(res.statusCode, 412);

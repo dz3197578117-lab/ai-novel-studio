@@ -20,7 +20,9 @@ pnpm dev          # 启动开发环境
 
 首次使用点 **⚙ 设置**，填入模型配置。
 
-### 接入模型（OpenAI 兼容，任选其一）
+### 接入模型（OpenAI 兼容）
+
+点 **⚙ 设置 → ＋ 添加**，可以直接点常用服务商预设（DeepSeek / OpenAI / 通义 / 本地 Ollama）一键填好地址和模型：
 
 | 服务 | Base URL | 模型名示例 |
 | --- | --- | --- |
@@ -28,6 +30,10 @@ pnpm dev          # 启动开发环境
 | OpenAI | `https://api.openai.com/v1` | `gpt-4o` |
 | 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-max` |
 | 本地 Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:14b` |
+
+**可以存多套配置**，比如「DeepSeek 日常用」和「Ollama 离线用」各存一套，点「设为当前」随时切换，不用来回改 Key。
+
+填好 Base URL 和 Key 后点 **「拉取模型」**，会自动请求服务商的 `/models` 接口，模型名变成下拉列表供选择；服务商不支持时也可以手填。
 
 换成任何实现了 `/chat/completions` 的服务都能直接用，**不需要改代码**。
 

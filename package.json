@@ -18,6 +18,7 @@
     "test:e2e": "node scripts/e2e.mjs",
     "test:e2e:library": "node scripts/e2e-library.mjs",
     "test:e2e:draft": "node scripts/e2e-draft.mjs",
+    "test:e2e:settings": "node scripts/e2e-settings.mjs",
     "test:e2e:interaction": "node scripts/e2e-interaction.mjs",
     "test:e2e:write": "node scripts/e2e-write.mjs",
     "test:scroll": "node scripts/diagnose-scroll.mjs",

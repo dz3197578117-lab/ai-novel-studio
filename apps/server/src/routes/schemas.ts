@@ -44,24 +44,29 @@ export const writeRequest = z.object({
   memoryBudget: z.number().int().min(500).max(50_000).optional(),
 });
 
-export const settingsInput = z.object({
-  text: z
-    .object({
-      // 允许空串：用户可能想清空配置
-      baseUrl: z.string().max(500),
-      apiKey: z.string().max(500).optional(),
-      model: z.string().max(200),
-      temperature: z.number().min(0).max(2).optional(),
-      maxTokens: z.number().int().min(1).max(200_000).optional(),
-    })
-    .optional(),
-  image: z
-    .object({
-      baseUrl: z.string().max(500),
-      apiKey: z.string().max(500).optional(),
-      model: z.string().max(200),
-    })
-    .optional(),
+/** 一套模型配置 */
+export const profileInput = z.object({
+  name: z.string().min(1, '给这套配置起个名字').max(60),
+  baseUrl: z.string().max(500),
+  model: z.string().max(200),
+  // 允许空串（主动清空）；undefined 表示不修改
+  apiKey: z.string().max(500).optional(),
+  temperature: z.number().min(0).max(2).optional(),
+  maxTokens: z.number().int().min(1).max(200_000).optional(),
+});
+
+/** 拉取模型列表 / 测试连通性 */
+export const fetchModelsInput = z.object({
+  baseUrl: z.string().max(500).optional(),
+  apiKey: z.string().max(500).optional(),
+  profileId: z.string().max(100).optional(),
+});
+
+/** 图片模型配置 */
+export const imageSettingsInput = z.object({
+  baseUrl: z.string().max(500),
+  apiKey: z.string().max(500).optional(),
+  model: z.string().max(200),
 });
 
 export const exportRequest = z.object({

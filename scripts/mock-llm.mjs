@@ -171,6 +171,22 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // 模型列表（OpenAI 兼容 GET /v1/models）
+  if (req.url?.endsWith('/models') && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        object: 'list',
+        data: [
+          { id: 'mock-model', object: 'model' },
+          { id: 'mock-model-mini', object: 'model' },
+          { id: 'mock-reasoner', object: 'model' },
+        ],
+      }),
+    );
+    return;
+  }
+
   // 图像生成（可选路径）
   if (req.url?.endsWith('/images/generations') && req.method === 'POST') {
     // 1x1 透明 PNG

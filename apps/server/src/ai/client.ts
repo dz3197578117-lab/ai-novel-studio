@@ -1,5 +1,5 @@
 import type { AiProviderConfig, ChatMessage, TokenUsage } from '@novelforge/shared';
-import { getSetting } from '../repos/settings.repo.js';
+import { getActiveProfile, toProviderConfig } from '../repos/settings.repo.js';
 
 export interface StreamChatOptions {
   config: AiProviderConfig;
@@ -18,14 +18,20 @@ export class AiError extends Error {
 }
 
 /**
- * 读取已保存的文本模型配置。Key 为空时抛错，提示用户先去设置页填写。
+ * 读取「当前生效」的那套模型配置。没配置或没 Key 时抛错，
+ * 提示用户去设置页选一套或补充 Key。
  */
 export function loadTextConfig(): AiProviderConfig {
-  const cfg = getSetting<AiProviderConfig | null>('text', null);
-  if (!cfg || !cfg.apiKey) {
-    throw new AiError('尚未配置文本模型，请先在「设置」中填写 Base URL / API Key / 模型名。');
+  const profile = getActiveProfile();
+  if (!profile) {
+    throw new AiError('还没有任何模型配置，请先在「设置」里添加一个模型。');
   }
-  return cfg;
+  if (!profile.apiKey) {
+    throw new AiError(
+      `当前模型「${profile.name}」还没填 API Key，请先到「设置」里补上，或切换到其它配置。`,
+    );
+  }
+  return toProviderConfig(profile);
 }
 
 /**
@@ -137,4 +143,46 @@ function joinUrl(base: string, suffix: string): string {
   // 允许用户直接粘贴到 /chat/completions 的完整地址
   if (b.endsWith('/chat/completions')) return b;
   return `${b}${suffix}`;
+}
+
+/**
+ * 拉取服务商支持的模型列表（OpenAI 兼容的 GET /models）。
+ * 不同厂商返回结构略有差异，这里兼容 data[].id 与 models[].id 两种。
+ */
+export async function fetchModels(
+  baseUrl: string,
+  apiKey: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const url = joinUrl(baseUrl, '/models');
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal,
+    });
+  } catch (e) {
+    throw new AiError(`连不上 ${url}：${(e as Error).message}`);
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new AiError(
+      `获取模型列表失败 (${res.status})：${detail.slice(0, 300)}`,
+      res.status,
+    );
+  }
+
+  const json = (await res.json()) as {
+    data?: { id?: string }[];
+    models?: { id?: string; name?: string }[];
+  };
+
+  const ids = [
+    ...(json.data ?? []).map((m) => m.id),
+    ...(json.models ?? []).map((m) => m.id ?? m.name),
+  ].filter((s): s is string => typeof s === 'string' && s.length > 0);
+
+  // 去重并排序，方便查找
+  return [...new Set(ids)].sort((a, b) => a.localeCompare(b));
 }

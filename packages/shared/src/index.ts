@@ -137,12 +137,51 @@ export type ImageProviderConfig = {
   model: string;
 };
 
+/**
+ * 一套模型配置（一个服务商）。
+ * 可以存多套，随时切换当前使用哪一套。
+ */
+export interface ModelProfile extends Timestamped {
+  id: ID;
+  /** 显示名，如「DeepSeek 官方」「本地 Ollama」 */
+  name: string;
+  baseUrl: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
+/** 返回给前端的版本：不包含真实 Key，只给打码值 */
+export interface ModelProfilePublic extends ModelProfile {
+  apiKeyMasked: string;
+  hasApiKey: boolean;
+}
+
+export interface ModelProfileInput {
+  name: string;
+  baseUrl: string;
+  /** undefined = 不修改（编辑时），'' = 清空，掩码值 = 保留，其他 = 新 Key */
+  apiKey?: string;
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+}
+
 export interface Settings {
-  text: AiProviderConfig;
+  profiles: ModelProfilePublic[];
+  /** 当前生效的配置 id；null 表示还没选 */
+  activeProfileId: ID | null;
   image: ImageProviderConfig;
-  /** 是否暴露给前端读取（apiKey 永远打码） */
-  hasTextKey: boolean;
   hasImageKey: boolean;
+}
+
+/** 拉取某个服务商的可用模型列表 */
+export interface FetchModelsRequest {
+  baseUrl: string;
+  /** 直接给 Key（新配置还没保存时用） */
+  apiKey?: string;
+  /** 或者指定已保存的配置，从库里取 Key */
+  profileId?: ID;
 }
 
 export type WriteMode =

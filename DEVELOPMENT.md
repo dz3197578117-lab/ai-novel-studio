@@ -24,6 +24,18 @@
 
 ## 常见任务
 
+### 模型配置是怎么存的
+
+跟 DeepSeek Harness 类似：**多套配置 + 一个当前生效的 id**。
+
+- `settings` 表里是两个 key：`profiles`（JSON 数组，含真实 apiKey）、`activeProfileId`
+- `repos/settings.repo.ts` 是唯一入口：`getProfiles / createProfile / updateProfile / deleteProfile / getActiveProfile`
+- 模型调用一律走 `ai/client.ts` 的 `loadTextConfig()`，它取当前生效的那套并校验 Key
+- **Key 永远不出后端**：接口返回 `apiKeyMasked`，前端回传掩码时 `resolveSecret()` 会保留原值
+- 老版本只有一套 `settings.text`，`migrateLegacy()` 会自动转成一条配置，升级不掉 Key
+
+新增配置相关接口时，记得同步 `packages/shared` 的 `ModelProfile*` 类型和 `schemas.ts`。
+
 ### 调整「AI 生成小说」的产出
 
 流程分两步，改之前先弄清边界：

@@ -19,21 +19,24 @@ const check = (name, ok, detail = '') => {
 };
 
 async function main() {
-  // 1. 先把 mock 模型配好
-  const put = await fetch(`${API}/api/settings`, {
-    method: 'PUT',
+  // 1. 先把 mock 模型配好：建一套配置并设为当前
+  const created = await fetch(`${API}/api/profiles`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      text: {
-        baseUrl: 'http://127.0.0.1:8899/v1',
-        apiKey: 'mock-key',
-        model: 'mock-model',
-        temperature: 0.8,
-        maxTokens: 2048,
-      },
+      name: 'E2E Mock',
+      baseUrl: 'http://127.0.0.1:8899/v1',
+      apiKey: 'mock-key',
+      model: 'mock-model',
+      temperature: 0.8,
+      maxTokens: 2048,
     }),
   });
-  check('写入 mock 模型配置', put.ok, `HTTP ${put.status}`);
+  const createdBody = created.ok ? await created.json() : null;
+  const activated = createdBody
+    ? await fetch(`${API}/api/profiles/${createdBody.id}/activate`, { method: 'POST' })
+    : null;
+  check('写入 mock 模型配置', created.ok && Boolean(activated?.ok), `HTTP ${created.status}`);
 
   const projects = await (await fetch(`${API}/api/projects`)).json();
   const project = projects.find((p) => p.title === '长夜行') ?? projects[0];
