@@ -8,14 +8,22 @@ import type {
 } from '@novelforge/shared';
 import { AiError } from './client.js';
 
-/** 可自由设定，但要限制在单次生成能承受的范围内 */
+/** 章数上限。网文常见几百上千章，所以放宽到 1000 */
 const MIN_CHAPTERS = 1;
-const MAX_CHAPTERS = 100;
+export const MAX_CHAPTERS = 1000;
 
 /** 一次调用能稳妥装下的章节数；超过就分批生成 */
 export const SINGLE_CALL_MAX_CHAPTERS = 10;
-/** 分批时每批多少章 */
-export const CHAPTER_BATCH_SIZE = 12;
+/** 分批时每批多少章。20 章 ≈ 2000 token，给 8192 预算留足思考空间 */
+export const CHAPTER_BATCH_SIZE = 20;
+
+/** 每卷大致放多少章 */
+const CHAPTERS_PER_VOLUME = 40;
+/** 卷数上限，避免 1000 章被切成上百卷 */
+const MAX_VOLUMES = 20;
+
+/** 提示词里最多带多少条「已写章节」，防止历史撑爆上下文 */
+const MAX_PREVIOUS_TITLES = 15;
 
 const JSON_RULES = `只输出一个 JSON 对象，不要解释，不要 markdown 代码块，不要多余文字。
 文字要紧凑：outline 40-90 字，body 40-120 字，写清冲突与钩子即可，不要铺陈。`;
@@ -24,9 +32,9 @@ function clamp(n: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-/** 按每卷约 10 章推算卷数 */
+/** 按每卷约 40 章推算卷数（100 章 → 3 卷，1000 章 → 20 卷） */
 export function volumeCountFor(chapterCount: number): number {
-  return clamp(Math.ceil(chapterCount / 10), 1, 6);
+  return clamp(Math.ceil(chapterCount / CHAPTERS_PER_VOLUME), 1, MAX_VOLUMES);
 }
 
 // ───────────────────────── 提示词 ─────────────────────────
@@ -146,9 +154,17 @@ JSON 结构：
 2. volumeIndex 必须严格使用给定值。
 3. 前后衔接自然，不要与已写章节重复。`;
 
-  const prev = previousTitles.length
-    ? `已写过的章节（不要重复）：\n${previousTitles.map((t) => `- ${t}`).join('\n')}`
+  // 只带最近若干章的标题：几百上千章时全量塞进去会把上下文撑爆
+  const recent = previousTitles.slice(-MAX_PREVIOUS_TITLES);
+  const prev = recent.length
+    ? `已写过的最近 ${recent.length} 章（不要重复这些内容，接着往后写）：\n${recent
+        .map((t) => `- ${t}`)
+        .join('\n')}`
     : '这是第一批，还没有已写章节。';
+  const omitted =
+    previousTitles.length > recent.length
+      ? `\n（更早的 ${previousTitles.length - recent.length} 章已省略，无需重复它们的内容）`
+      : '';
 
   const user = `创作需求：${idea}
 
@@ -157,7 +173,7 @@ JSON 结构：
 请写以下章节：
 ${assignment}
 
-${prev}`;
+${prev}${omitted}`;
 
   return { system, user };
 }
@@ -305,7 +321,7 @@ function normalizeEntities(raw: unknown): DraftEntity[] {
 
 function normalizeVolumes(raw: unknown): DraftVolume[] {
   const list = arr(raw)
-    .slice(0, 8)
+    .slice(0, MAX_VOLUMES)
     .map((v) => ({
       title: str((v as Record<string, unknown>)?.title).slice(0, 100) || '未命名卷',
       summary: str((v as Record<string, unknown>)?.summary).slice(0, 2000),

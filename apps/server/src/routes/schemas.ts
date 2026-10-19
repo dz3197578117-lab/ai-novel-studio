@@ -100,7 +100,7 @@ export const draftRequestSchema = z.object({
   idea: z.string().min(4, '请至少写几个字描述你想要的小说').max(2000),
   genre: z.string().max(60).optional(),
   /** 章数由用户自由填写，限制在可生成的范围内 */
-  chapterCount: z.number().int().min(1).max(100).optional(),
+  chapterCount: z.number().int().min(1).max(1000).optional(),
 });
 
 /**
@@ -128,16 +128,16 @@ export const novelDraftSchema = z.object({
   entities: z.array(draftEntitySchema).max(20).optional(),
   volumes: z
     .array(z.object({ title: z.string().min(1).max(200), summary: z.string().max(20_000).optional() }))
-    .max(10)
+    .max(20)
     .optional(),
   chapters: z
     .array(
       z.object({
-        volumeIndex: z.number().int().min(0).max(20),
+        volumeIndex: z.number().int().min(0).max(30),
         title: z.string().min(1).max(200),
         outline: z.string().max(20_000).optional(),
       }),
     )
     .min(1, '至少需要一章')
-    .max(100, '章节数量超出限制'),
+    .max(1000, '章节数量超出限制'),
 });

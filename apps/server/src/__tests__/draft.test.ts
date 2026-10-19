@@ -8,6 +8,7 @@ import {
   parseSkeleton,
   renumberChapterTitle,
   repairTruncatedJson,
+  volumeCountFor,
 } from '../ai/draft.js';
 
 const VALID = {
@@ -82,14 +83,14 @@ test('parseDraft 没有书名时报错', () => {
 test('parseDraft 会把超量数据截断', () => {
   const many = {
     ...VALID,
-    chapters: Array.from({ length: 200 }, (_, i) => ({
+    chapters: Array.from({ length: 1500 }, (_, i) => ({
       volumeIndex: 0,
       title: `第${i}章`,
       outline: 'x',
     })),
   };
   const d = parseDraft(JSON.stringify(many));
-  assert.ok(d.chapters.length <= 100, `实际 ${d.chapters.length}`);
+  assert.ok(d.chapters.length <= 1000, `实际 ${d.chapters.length}`);
 });
 
 test('buildDraftPrompt 带上需求、题材与章数', () => {
@@ -100,21 +101,49 @@ test('buildDraftPrompt 带上需求、题材与章数', () => {
   assert.match(p.system, /JSON/);
 });
 
-test('buildDraftPrompt 章数会被限制在合理范围', () => {
-  const p = buildDraftPrompt({ idea: 'x', chapterCount: 999 });
-  assert.match(p.user, /100 章/);
+test('buildDraftPrompt 章数会被限制在 1000 以内', () => {
+  const p = buildDraftPrompt({ idea: 'x', chapterCount: 5000 });
+  assert.match(p.user, /1000 章/);
 });
 
-test('buildDraftPrompt 支持自定义章数', () => {
+test('buildDraftPrompt 支持自定义章数与大卷数', () => {
   const p = buildDraftPrompt({ idea: 'x', chapterCount: 37 });
   assert.match(p.user, /37 章/);
-  // 37 章按每卷 10 章算应规划 4 卷
-  assert.match(p.system, /volumes 为 4 卷/);
+  // 每卷约 40 章，37 章 → 1 卷
+  assert.match(p.system, /volumes 为 1 卷/);
+
+  const big = buildDraftPrompt({ idea: 'x', chapterCount: 1000 });
+  assert.match(big.system, /volumes 为 20 卷/);
 });
 
 test('buildDraftPrompt 章数最小为 1', () => {
   const p = buildDraftPrompt({ idea: 'x', chapterCount: 0 });
   assert.match(p.user, /1 章/);
+});
+
+test('volumeCountFor 按每卷约 40 章分配，上限 20 卷', () => {
+  assert.equal(volumeCountFor(100), 3);
+  assert.equal(volumeCountFor(200), 5);
+  assert.equal(volumeCountFor(1000), 20);
+  assert.equal(volumeCountFor(1), 1);
+});
+
+test('分批提示词只带最近 15 章，避免上下文爆掉', () => {
+  const previousTitles = Array.from({ length: 400 }, (_, i) => `第${i + 1}章 · 标题`);
+  const p = buildChapterBatchPrompt({
+    idea: 'x',
+    title: '雪落',
+    logline: 'y',
+    volumes: [{ title: '第一卷', summary: '' }],
+    volumeIndexFor: [0],
+    startNumber: 401,
+    batchNumber: 21,
+    batchTotal: 50,
+    previousTitles,
+  });
+  assert.ok(p.user.includes('第400章'), '应包含最近的章节');
+  assert.ok(!p.user.includes('第1章 · 标题'), '不应包含最早的章节');
+  assert.match(p.user, /38[0-9] 章已省略|更早的 \d+ 章已省略/);
 });
 
 // ───────── 截断修复（推理模型把 max_tokens 吃满时的救命逻辑）─────────

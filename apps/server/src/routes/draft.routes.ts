@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AiProviderConfig, DraftChapter, InterviewMessage, NovelDraft, Project } from '@novelforge/shared';
 import {
   CHAPTER_BATCH_SIZE,
+  MAX_CHAPTERS,
   SINGLE_CALL_MAX_CHAPTERS,
   buildChapterBatchPrompt,
   buildDraftPrompt,
@@ -239,7 +240,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
 
-    const chapterCount = Math.max(1, Math.min(100, parsed.data.chapterCount ?? 10));
+    const chapterCount = Math.max(1, Math.min(MAX_CHAPTERS, parsed.data.chapterCount ?? 10));
     const request = { ...parsed.data, chapterCount };
 
     try {

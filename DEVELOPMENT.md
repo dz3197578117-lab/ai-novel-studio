@@ -232,7 +232,7 @@ completion_tokens_details.reasoning_tokens: 1327   ← 其中 1300+ 是思考
 2. **能救就救**：`repairTruncatedJson()` 退到最后一个完整元素处补括号，
    少几章也比整个失败好（前端会提示「你要求 N 章，AI 给了 M 章」）
 3. **装不下就分批**：超过 `SINGLE_CALL_MAX_CHAPTERS`（10 章）时走
-   骨架一次 + 章节按 `CHAPTER_BATCH_SIZE`（12 章）分批，见 `generateChunked()`
+   骨架一次 + 章节按 `CHAPTER_BATCH_SIZE`（20 章）分批，见 `generateChunked()`
 
 分批带来的两个坑也一并处理了：
 
@@ -240,6 +240,19 @@ completion_tokens_details.reasoning_tokens: 1327   ← 其中 1300+ 是思考
   或指数退避重试（最多 4 次），批次之间再等 2.5 秒
 - **章号从 1 重数**：模型每批都会写「第1章」。批次提示词改成给全局章号，
   并且 `renumberChapterTitle()` 在服务端兜底重编号
+
+几个容量相关的常量都在 `ai/draft.ts`：
+
+| 常量 | 值 | 作用 |
+| --- | --- | --- |
+| `MAX_CHAPTERS` | 1000 | 章数上限 |
+| `SINGLE_CALL_MAX_CHAPTERS` | 10 | 超过就分批 |
+| `CHAPTER_BATCH_SIZE` | 20 | 每批章节数 |
+| `CHAPTERS_PER_VOLUME` | 40 | 每卷约多少章 |
+| `MAX_VOLUMES` | 20 | 卷数上限 |
+| `MAX_PREVIOUS_TITLES` | 15 | 分批提示词里只带最近 N 章标题（否则上千章会撑爆上下文） |
+
+改这些值时注意：批次越大越容易触发截断，卷数上限也会连带影响 `novelDraftSchema` 的校验范围。
 
 排查这类问题时用 `scripts/diagnose-provider.mjs`：它用当前生效配置直接请求一次，
 打印 `finish_reason`、usage 和原文首尾，不改数据库。

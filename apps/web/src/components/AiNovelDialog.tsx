@@ -4,9 +4,9 @@ import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import { Modal } from './Modal';
 
-const CHAPTER_OPTIONS = [6, 10, 15, 20, 30];
+const CHAPTER_OPTIONS = [30, 100, 200, 500, 1000];
 const MIN_CHAPTERS = 1;
-const MAX_CHAPTERS = 100;
+const MAX_CHAPTERS = 1000;
 
 function clampCount(n: number): number {
   if (!Number.isFinite(n)) return 10;
@@ -60,6 +60,8 @@ export function AiNovelDialog({
   const [drafting, setDrafting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [requestedCount, setRequestedCount] = useState<number | null>(null);
+  /** 生成计时：章数多时要跑几分钟，让用户看得见还在动 */
+  const [elapsed, setElapsed] = useState(0);
 
   const chatRef = useRef<HTMLDivElement | null>(null);
   const chapterCount = clampCount(Number(chapterInput));
@@ -80,6 +82,17 @@ export function AiNovelDialog({
     const el = chatRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, thinking, reply]);
+
+  // 生成期间的计时器
+  useEffect(() => {
+    if (!drafting) {
+      setElapsed(0);
+      return;
+    }
+    setElapsed(0);
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [drafting]);
 
   async function send(text: string) {
     const content = text.trim();
@@ -246,9 +259,12 @@ export function AiNovelDialog({
 
           {drafting && (
             <div className="empty" style={{ padding: '10px 0' }}>
+              已用 {elapsed} 秒 ·{' '}
               {chapterCount > 10
-                ? `章节较多，正在分批生成 ${chapterCount} 章，可能需要 1-3 分钟…`
-                : '正在构思方案，通常需要 10-60 秒…'}
+                ? `正在分批生成 ${chapterCount} 章${
+                    chapterCount > 300 ? '（预计 10 分钟以上，可以先去泡杯茶）' : '（预计 1-3 分钟）'
+                  }`
+                : '正在构思方案（通常 10-60 秒）'}
             </div>
           )}
         </>

@@ -206,18 +206,18 @@ async function main() {
       })()`);
       check('出现「开始生成方案」按钮', hasStartBtn);
 
-      // 设成 13 章：超过单次上限，验证服务端走「骨架 + 分批」路径
+      // 设成 45 章：超过单次上限，验证服务端走「骨架 + 分批」路径（每批 20 章，共 3 批）
       const setCount = await evaluate(`(() => {
         const input = document.querySelector('.chat-count input');
         if (!input) return null;
         const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-        setter.call(input, '13');
+        setter.call(input, '45');
         input.dispatchEvent(new Event('input', { bubbles: true }));
         return true;
       })()`);
       await sleep(400);
       const countValue = await evaluate('document.querySelector(".chat-count input")?.value ?? ""');
-      check('章数可设为 13（触发分批生成）', setCount === true && countValue === '13', `value=${countValue}`);
+      check('章数可设为 45（触发分批生成）', setCount === true && countValue === '45', `value=${countValue}`);
 
       // 7. 生成方案
       const clickedGenerate = await evaluate(`(() => {
@@ -237,15 +237,15 @@ async function main() {
 
       const chaptersRendered = await evaluate('document.querySelectorAll(".draft-chapter").length');
       check('预览包含章节大纲', chaptersRendered >= 3, `${chaptersRendered} 章`);
-      check('分批生成了全部 13 章', chaptersRendered === 13, `${chaptersRendered} 章`);
+      check('分批生成了全部 45 章', chaptersRendered === 45, `${chaptersRendered} 章`);
 
       const titleList = await evaluate(
         'Array.from(document.querySelectorAll(".draft-chapter-title")).map(e=>e.textContent).join("|")',
       );
       check(
-        '跨批章节编号连续（没有从第1章重数）',
-        titleList.includes('第1章') && titleList.includes('第13章') && !titleList.split('|')[1]?.startsWith('第1章'),
-        titleList.slice(0, 60),
+        '跨批章节编号连续（第1章到第45章，没有重数）',
+        titleList.startsWith('第1章') && titleList.includes('第45章') && !titleList.includes('第45章|第1章'),
+        titleList.slice(0, 40) + ' … ' + titleList.slice(-40),
       );
       const entitiesRendered = await evaluate('document.querySelectorAll(".draft-entity").length');
       check('预览包含设定条目', entitiesRendered >= 3, `${entitiesRendered} 条`);
