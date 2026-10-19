@@ -60,6 +60,8 @@ export function AiNovelDialog({
   const [drafting, setDrafting] = useState(false);
   const [creating, setCreating] = useState(false);
   const [requestedCount, setRequestedCount] = useState<number | null>(null);
+  /** 正在重做第几章的大纲 */
+  const [regenIndex, setRegenIndex] = useState<number | null>(null);
   /** 生成计时：章数多时要跑几分钟，让用户看得见还在动 */
   const [elapsed, setElapsed] = useState(0);
 
@@ -137,6 +139,35 @@ export function AiNovelDialog({
       setError((e as Error).message);
     } finally {
       setDrafting(false);
+    }
+  }
+
+  /** 只重做某一章的大纲，其余不动 */
+  async function regenChapter(index: number) {
+    if (!draft) return;
+    setRegenIndex(index);
+    try {
+      const res = await api.post<{ chapter: NovelDraft['chapters'][number] }>(
+        '/api/ai/regenerate-chapter',
+        {
+          title: draft.title,
+          logline: draft.logline,
+          volumes: draft.volumes,
+          chapters: draft.chapters,
+          index,
+        },
+      );
+      setDraft({
+        ...draft,
+        chapters: draft.chapters.map((c, i) =>
+          // 保持原来的卷归属，只替换标题与大纲
+          i === index ? { ...c, title: res.chapter.title, outline: res.chapter.outline } : c,
+        ),
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRegenIndex(null);
     }
   }
 
@@ -310,19 +341,32 @@ export function AiNovelDialog({
           )}
 
           <div className="field">
-            <label>卷章大纲</label>
+            <label>卷章大纲（单章不满意可以单独重做）</label>
             <div className="draft-outline">
               {draft.volumes.map((v, vi) => (
                 <div key={`${v.title}-${vi}`}>
                   <div className="draft-volume">{v.title}</div>
                   {draft.chapters
                     .filter((c) => c.volumeIndex === vi)
-                    .map((c, ci) => (
-                      <div className="draft-chapter" key={`${c.title}-${ci}`}>
-                        <div className="draft-chapter-title">{c.title}</div>
-                        <div className="summary">{c.outline}</div>
-                      </div>
-                    ))}
+                    .map((c) => {
+                      const globalIndex = draft.chapters.indexOf(c);
+                      return (
+                        <div className="draft-chapter" key={`${c.title}-${globalIndex}`}>
+                          <div className="draft-chapter-row">
+                            <div className="draft-chapter-title">{c.title}</div>
+                            <button
+                              className="count-chip draft-regen"
+                              disabled={regenIndex !== null}
+                              onClick={() => void regenChapter(globalIndex)}
+                              title="只重做这一章的大纲"
+                            >
+                              {regenIndex === globalIndex ? '重做中…' : '↻ 重做'}
+                            </button>
+                          </div>
+                          <div className="summary">{c.outline}</div>
+                        </div>
+                      );
+                    })}
                 </div>
               ))}
             </div>

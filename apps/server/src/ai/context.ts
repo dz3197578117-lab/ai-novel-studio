@@ -19,7 +19,14 @@ const MODE_INSTRUCTION: Record<WriteMode, string> = {
     '请在不改变情节走向的前提下扩写用户提供的文本，补充细节、动作、心理与环境描写。只输出扩写后的文本。',
   style:
     '请严格模仿用户指定的文风样本进行写作：句式、用词、比喻密度、叙述距离都要贴近样本。直接输出正文。',
+  chapter:
+    '请根据本章大纲，写出**完整的一章正文**（约 2000-3000 字）：有起承转合，有场景、对话、动作与心理，结尾留钩子。不要输出章节标题，不要写提纲，不要解释，直接写正文。',
+  'chapter-rewrite':
+    '请**重写本章正文**：参考现有版本，但允许大幅调整情节编排、节奏与描写。要写完整的整章（约 2000-3000 字），不要只改写局部。不要输出章节标题，不要解释，直接输出重写后的完整正文。',
 };
+
+/** 这两个模式产出的是「整章正文」，前端会整段替换 */
+export const CHAPTER_MODES: WriteMode[] = ['chapter', 'chapter-rewrite'];
 
 /**
  * 组装生成上下文。核心目标：在 token 预算内塞入最有用的信息。
@@ -122,14 +129,28 @@ export function buildContext(params: {
     .filter((s) => s !== undefined)
     .join('\n');
 
-  // 6. 用户消息：选区或已有正文的尾部
+  // 6. 用户消息：选区 / 已有正文 / 整章写作指令
   const userParts: string[] = [];
-  if (selection && selection.trim()) {
+  const isChapterMode = CHAPTER_MODES.includes(mode);
+
+  if (isChapterMode) {
+    if (mode === 'chapter-rewrite' && chapter.content.trim()) {
+      // 重写时给出原稿作参考，但明确允许推翻
+      const reference =
+        chapter.content.length > 6000
+          ? chapter.content.slice(0, 6000) + '\n…（后略）'
+          : chapter.content;
+      userParts.push(`【现有版本（参考，允许大改）】\n${reference}`);
+    } else {
+      userParts.push('【开始写作】请根据本章大纲写出完整正文。');
+    }
+  } else if (selection && selection.trim()) {
     userParts.push(`【待处理文本】\n${selection.trim()}`);
   } else if (chapter.content.trim()) {
     const tail = tailByChars(chapter.content, 2500);
     userParts.push(`【本章已有正文（结尾部分）】\n${tail}`);
   }
+
   if (instruction && instruction.trim()) {
     userParts.push(`【额外要求】\n${instruction.trim()}`);
   }

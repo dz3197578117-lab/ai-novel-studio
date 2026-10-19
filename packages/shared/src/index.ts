@@ -185,11 +185,13 @@ export interface FetchModelsRequest {
 }
 
 export type WriteMode =
-  | 'continue'   // 续写
-  | 'rewrite'    // 改写选中片段
-  | 'polish'     // 润色
-  | 'expand'     // 扩写
-  | 'style';     // 仿写指定风格
+  | 'continue'        // 续写
+  | 'rewrite'         // 改写选中片段
+  | 'polish'          // 润色
+  | 'expand'          // 扩写
+  | 'style'           // 仿写指定风格
+  | 'chapter'         // 按大纲写整章正文（从零）
+  | 'chapter-rewrite'; // 重写整章正文（参考现有版本）
 
 export interface WriteRequest {
   projectId: ID;
@@ -269,6 +271,28 @@ export interface NovelDraft {
   entities: DraftEntity[];
   volumes: DraftVolume[];
   chapters: DraftChapter[];
+}
+
+/** 单独重新生成某一章的大纲 */
+export interface ChapterRegenRequest {
+  /** 整本需求（可空） */
+  idea?: string;
+  /** 书名，让新章节贴合基调 */
+  title: string;
+  logline?: string;
+  volumes: { title: string; summary: string }[];
+  /** 当前全部章节，用于取上下文 */
+  chapters: { volumeIndex: number; title: string; outline: string }[];
+  /** 要重做第几章（从 0 开始） */
+  index: number;
+  /** 额外要求，如「这一章要更紧张」 */
+  instruction?: string;
+}
+
+export interface ChapterRegenReply {
+  volumeIndex: number;
+  title: string;
+  outline: string;
 }
 
 /** 流式事件：SSE 传输，每行 `data: <json>\n\n` */

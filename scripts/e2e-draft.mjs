@@ -252,6 +252,33 @@ async function main() {
       const volumesRendered = await evaluate('document.querySelectorAll(".draft-volume").length');
       check('预览按卷分组', volumesRendered >= 1, `${volumesRendered} 卷`);
 
+      // 单章大纲重做
+      const firstTitleBefore = await evaluate(
+        'document.querySelectorAll(".draft-chapter-title")[0]?.textContent ?? ""',
+      );
+      const regenClicked = await evaluate(`(() => {
+        const btn = document.querySelectorAll('.draft-regen')[0];
+        if (!btn || btn.disabled) return false;
+        btn.click();
+        return true;
+      })()`);
+      check('存在单章重做入口', regenClicked);
+
+      let regenTitle = '';
+      for (let i = 0; i < 30; i++) {
+        await sleep(300);
+        regenTitle = await evaluate(
+          'document.querySelectorAll(".draft-chapter-title")[0]?.textContent ?? ""',
+        );
+        if (regenTitle.includes('重做版')) break;
+      }
+      check('单章大纲已重做', regenTitle.includes('重做版'), `${firstTitleBefore} → ${regenTitle}`);
+
+      const others = await evaluate(
+        'Array.from(document.querySelectorAll(".draft-chapter-title")).slice(1).map(e=>e.textContent).join("|")',
+      );
+      check('其它章节没有被一起改掉', !others.includes('重做版'), `剩余 ${others.split('|').length} 章`);
+
       // 8. 创建作品
       const clickedCreate = await evaluate(`(() => {
         const b = Array.from(document.querySelectorAll('.modal button')).find(x => x.textContent.includes('创建这本书'));

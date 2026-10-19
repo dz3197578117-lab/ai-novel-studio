@@ -257,6 +257,21 @@ completion_tokens_details.reasoning_tokens: 1327   ← 其中 1300+ 是思考
 排查这类问题时用 `scripts/diagnose-provider.mjs`：它用当前生效配置直接请求一次，
 打印 `finish_reason`、usage 和原文首尾，不改数据库。
 
+**10. 作品被误删后无从恢复**
+
+曾经出现过整个演示作品从库里消失、且没有任何备份可回滚的情况。
+SQLite 删除是提交式的，删了就没了，只能从 WAL 的旧页面里捞残片（`scripts/salvage-wal.mjs` 干这个），
+代价大且不保证完整。
+
+现在有两道保险，见 `repos/backup.ts`：
+
+- **定期备份**：服务启动时 + 每 6 小时把整个 `.db` 复制到 `data/backups/`，保留最近 10 份
+- **删除留档**：`DELETE /api/projects/:id` 和 `/api/chapters/:id` 会先把完整内容写成
+  `data/backups/deleted-*.json` 再执行删除
+
+改删除逻辑时**不要绕过 `archiveDeleted()`**，否则等于拆掉保险。
+恢复方式：停服务 → 用备份的 .db 覆盖 → 重启；或从 deleted-*.json 里把内容粘回界面。
+
 ## 数据库迁移
 
 改表结构时：

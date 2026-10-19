@@ -5,10 +5,12 @@ import {
   MAX_CHAPTERS,
   SINGLE_CALL_MAX_CHAPTERS,
   buildChapterBatchPrompt,
+  buildChapterRegenPrompt,
   buildDraftPrompt,
   buildSkeletonPrompt,
   parseChapterBatch,
   parseDraft,
+  parseRegeneratedChapter,
   parseSkeleton,
   renumberChapterTitle,
   volumeCountFor,
@@ -18,7 +20,7 @@ import { AiError, complete, completeDetailed, loadTextConfig } from '../ai/clien
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import { createChapter, createVolume } from '../repos/chapters.repo.js';
-import { draftRequestSchema, interviewRequest, novelDraftSchema } from './schemas.js';
+import { draftRequestSchema, interviewRequest, novelDraftSchema, chapterRegenRequest } from './schemas.js';
 
 /** 单次调用的超时时间（含重试等待） */
 const DRAFT_CALL_TIMEOUT_MS = 180_000;
@@ -257,6 +259,54 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
         ? '生成超时，请减少章节数或重试。'
         : `生成失败：${(e as Error).message}`;
       return reply.code(502).send({ error: 'draft_failed', message: msg });
+    }
+  });
+
+  // ── 单章大纲重生 ──
+  app.post('/api/ai/regenerate-chapter', async (req, reply) => {
+    const parsed = chapterRegenRequest.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '参数校验失败',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    try {
+      const prompt = buildChapterRegenPrompt(parsed.data);
+      const res = await completeDetailed(
+        config,
+        [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
+        { maxTokens: draftBudget(config) },
+      );
+      const chapter = parseRegeneratedChapter(
+        res.content,
+        Math.max(1, parsed.data.volumes.length),
+      );
+      return { chapter };
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(502).send({ error: 'regen_failed', message: e.message });
+      }
+      const msg = (e as Error).name === 'TimeoutError'
+        ? '重生成超时，请重试。'
+        : `重生成失败：${(e as Error).message}`;
+      return reply.code(502).send({ error: 'regen_failed', message: msg });
     }
   });
 

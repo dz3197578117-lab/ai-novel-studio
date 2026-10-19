@@ -120,18 +120,28 @@ const server = http.createServer((req, res) => {
       const isDraftRequest = /网络小说策划/.test(system?.content ?? '');
       // 分批生成章节大纲
       const isBatchRequest = /编写章节大纲/.test(system?.content ?? '');
+      // 单章大纲重生
+      const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
       // 对话式访谈：第一轮反问，第二轮给结论
       const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
       const userTurns = (String(lastUser?.content ?? '').match(/用户：/g) ?? []).length;
       console.log(
         'is draft request:', isDraftRequest,
         '| is batch:', isBatchRequest,
+        '| is regen:', isRegenRequest,
         '| is interview:', isInterviewRequest,
         '| turns:', userTurns,
       );
 
       let content = SAMPLE.join('');
-      if (isBatchRequest) {
+      if (isRegenRequest) {
+        const n = /第\s*(\d+)\s*章/.exec(system?.content ?? '')?.[1] ?? '1';
+        content = JSON.stringify({
+          volumeIndex: 0,
+          title: `第${n}章 · 重做版标题`,
+          outline: `重做后的第${n}章大纲：新的冲突与钩子。`,
+        });
+      } else if (isBatchRequest) {
         // 按提示词里给定的章号与卷号返回对应数量的章节
         const asked = [...String(lastUser?.content ?? '').matchAll(
           /第\s*(\d+)\s*章\s*→\s*volumeIndex\s*(\d+)/g,

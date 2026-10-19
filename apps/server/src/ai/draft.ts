@@ -413,3 +413,71 @@ export function renumberChapterTitle(title: string, index: number): string {
     .trim();
   return stripped ? `第${n}章 · ${stripped}` : `第${n}章`;
 }
+
+// ───────────────────────── 单章大纲重生 ─────────────────────────
+
+/** 构造「只重做某一章」的提示词，带上前后章节保证衔接 */
+export function buildChapterRegenPrompt(req: {
+  idea?: string;
+  title: string;
+  logline?: string;
+  volumes: { title: string; summary: string }[];
+  chapters: { volumeIndex: number; title: string; outline: string }[];
+  index: number;
+  instruction?: string;
+}): { system: string; user: string } {
+  const target = req.chapters[req.index];
+  if (!target) {
+    throw new AiError('要重做的章节不存在。');
+  }
+  const n = req.index + 1;
+  const volume = req.volumes[target.volumeIndex];
+
+  const neighborLines = req.chapters
+    .map((c, i) => {
+      if (i === req.index) return null;
+      const mark = Math.abs(i - req.index) <= 2 ? '（相邻）' : '';
+      return `- 第${i + 1}章 ${c.title}：${c.outline}${mark}`;
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  const system = `你在为网络小说《${req.title}》单独重做**第 ${n} 章**的大纲。
+${req.logline ? `作品简介：${req.logline}` : ''}
+${volume ? `本章所属：${volume.title}——${volume.summary}` : ''}
+
+其他章节（用来保证前后衔接，不要重复它们的情节）：
+${neighborLines}
+
+要求：
+- 只输出第 ${n} 章这一章，**不要**输出其它章节。
+- 新大纲要能和上一章结尾接上，并给下一章留钩子；不要与相邻章节撞情节。
+- 比原来的版本更有冲突和看点。
+
+${JSON_RULES}
+
+JSON 结构：
+{ "volumeIndex": ${target.volumeIndex}, "title": "第${n}章 · 章名", "outline": "本章梗概，40-90 字" }`;
+
+  const userParts = [`创作需求：${req.idea?.trim() || '（未提供，按书名与现有章节推断）'}`];
+  userParts.push(
+    `原来的第 ${n} 章（不满意，需要重做）：\n标题：${target.title}\n大纲：${target.outline}`,
+  );
+  if (req.instruction?.trim()) {
+    userParts.push(`这次的要求：${req.instruction.trim()}`);
+  }
+
+  return { system, user: userParts.join('\n\n') };
+}
+
+/** 解析单章重生的结果 */
+export function parseRegeneratedChapter(raw: string, volumeCount: number): DraftChapter {
+  const o = parseObject(raw);
+  const idx = Number(o.volumeIndex);
+  return {
+    volumeIndex:
+      Number.isFinite(idx) && idx >= 0 && idx < volumeCount ? Math.floor(idx) : 0,
+    title: str(o.title).slice(0, 100) || '未命名章节',
+    outline: str(o.outline).slice(0, 3000),
+  };
+}

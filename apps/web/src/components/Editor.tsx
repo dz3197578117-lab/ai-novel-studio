@@ -123,6 +123,12 @@ export function Editor() {
 
       if (mode === 'insert') {
         insertAtCursor(text);
+      } else if (mode === 'replace') {
+        // 整章生成/重写：整段替换
+        setContent(text);
+        markEdit({ content: text });
+        const el = fictionRef.current;
+        if (el) el.scrollTop = 0;
       } else {
         const next = content + text;
         scrollToBottomRef.current = true;

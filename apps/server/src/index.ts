@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { HOST, IMAGES_DIR, IS_DEV, PORT, PORT_RETRY, DATA_DIR } from './config.js';
 import { getDb } from './db.js';
+import { startAutoBackup } from './repos/backup.js';
 import { projectRoutes } from './routes/projects.routes.js';
 import { entityRoutes } from './routes/entities.routes.js';
 import { chapterRoutes } from './routes/chapters.routes.js';
@@ -76,6 +77,8 @@ export async function buildServer() {
 
 async function main() {
   getDb();
+  // 数据库定期自动备份（有作品被误删后无从恢复的教训）
+  startAutoBackup();
   const app = await buildServer();
 
   // 端口被占用时自动顺延，避免用户机器上别的程序占着默认端口就启动失败

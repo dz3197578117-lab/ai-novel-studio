@@ -27,21 +27,30 @@ export function AiPanel() {
   const abortRef = useRef<(() => void) | null>(null);
   /** 本次生成属于哪一章：切章后结果不该再往新章节里塞 */
   const startedForRef = useRef<string | null>(null);
+  /** 本次结果是用哪个模式生成的，决定「替换正文」还是「插入/追加」 */
+  const [resultMode, setResultMode] = useState<WriteMode | null>(null);
 
-  function generate() {
+  function generate(modeOverride?: WriteMode) {
     if (!project || !chapter) return;
+    const useMode = modeOverride ?? mode;
     setResult('');
     setMemory([]);
     setStreaming(true);
+    setResultMode(useMode);
     startedForRef.current = chapter.id;
 
     abortRef.current = streamWrite(
       {
         projectId: project.id,
         chapterId: chapter.id,
-        mode,
+        mode: useMode,
         instruction: instruction.trim() || undefined,
-        selection: mode === 'continue' ? undefined : getSelectionText() || undefined,
+        selection:
+          useMode === 'chapter' || useMode === 'chapter-rewrite'
+            ? undefined
+            : useMode === 'continue'
+              ? undefined
+              : getSelectionText() || undefined,
         memoryBudget: 6000,
       },
       {
@@ -99,6 +108,22 @@ export function AiPanel() {
     setResult('');
   }
 
+  /** 整章生成/重写：整段替换本章正文 */
+  function replaceChapter() {
+    if (!result.trim()) return;
+    const len = chapter?.content.length ?? 0;
+    const ok =
+      len === 0 ||
+      confirm(
+        `将用生成结果替换本章现有正文（${len} 字）。\n\n此操作会覆盖当前内容，但不影响其它章节。确定替换？`,
+      );
+    if (!ok) return;
+    window.dispatchEvent(
+      new CustomEvent('novelforge:apply', { detail: { text: result, mode: 'replace' } }),
+    );
+    setResult('');
+  }
+
   async function makeSummary() {
     if (!chapter) return;
     try {
@@ -147,14 +172,37 @@ export function AiPanel() {
           <button
             className="primary"
             style={{ flex: 1 }}
-            onClick={generate}
+            onClick={() => generate()}
             disabled={streaming}
           >
             {streaming ? '生成中…' : '生成'}
           </button>
           {streaming && <button onClick={stop}>停止</button>}
         </div>
-        <div className="hint">Ctrl+Enter 快速生成 · 改写/润色前先在正文里选中一段</div>
+
+        {/* 整章操作：不依赖选区，直接按大纲产出整章正文 */}
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <button
+            style={{ flex: 1 }}
+            onClick={() => generate('chapter')}
+            disabled={streaming}
+            title="按本章大纲写出一整章（覆盖结果可在下方一键替换）"
+          >
+            整章生成
+          </button>
+          <button
+            style={{ flex: 1 }}
+            onClick={() => generate('chapter-rewrite')}
+            disabled={streaming || !chapter.content.trim()}
+            title="参考现有正文重写整章"
+          >
+            整章重写
+          </button>
+        </div>
+
+        <div className="hint">
+          Ctrl+Enter 快速生成 · 改写/润色前先在正文里选中一段 · 整章生成后再点「替换正文」
+        </div>
       </div>
 
       <div className="result-box">
@@ -162,12 +210,35 @@ export function AiPanel() {
       </div>
 
       <div className="ai-actions">
-        <button className="primary" style={{ flex: 1 }} onClick={insertToText} disabled={!result.trim()}>
-          插入到光标
-        </button>
-        <button style={{ flex: 1 }} onClick={applyToText} disabled={!result.trim()}>
-          追加到末尾
-        </button>
+        {resultMode === 'chapter' || resultMode === 'chapter-rewrite' ? (
+          <>
+            <button
+              className="primary"
+              style={{ flex: 1 }}
+              onClick={replaceChapter}
+              disabled={!result.trim()}
+            >
+              替换正文
+            </button>
+            <button onClick={applyToText} disabled={!result.trim()}>
+              追加到末尾
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              className="primary"
+              style={{ flex: 1 }}
+              onClick={insertToText}
+              disabled={!result.trim()}
+            >
+              插入到光标
+            </button>
+            <button style={{ flex: 1 }} onClick={applyToText} disabled={!result.trim()}>
+              追加到末尾
+            </button>
+          </>
+        )}
         <button onClick={makeSummary} title="生成该章摘要，供后续章节记忆使用">
           记忆摘要
         </button>

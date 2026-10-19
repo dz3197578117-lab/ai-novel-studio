@@ -1,15 +1,20 @@
 /**
- * 端到端验证「AI 写作」完整交互：
- * 配置 mock 模型 → 打开章节 → 点生成 → 确认流式文本出现 → 追加到正文。
+ * 写作台 AI 链路端到端测试：
+ * 整章生成 → 替换正文、续写 → 追加到末尾。
+ *
+ * 全程使用「临时章节」，不碰已有作品正文；结束后删除并还原设置。
  */
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PORT = 9444;
-const API = process.env.API_BASE ?? 'http://127.0.0.1:8789';
-const UI = process.env.UI_BASE ?? 'http://127.0.0.1:5173';
+const MOCK_PORT = 8899;
+const UI = process.env.UI_BASE ?? 'http://127.0.0.1:5173/';
+const API = process.env.API_BASE ?? 'http://127.0.0.1:8787';
+const TMP_CHAPTER = 'E2E临时章';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
@@ -18,173 +23,240 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
-async function main() {
-  // 1. 先把 mock 模型配好：建一套配置并设为当前
-  const created = await fetch(`${API}/api/profiles`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: 'E2E Mock',
-      baseUrl: 'http://127.0.0.1:8899/v1',
-      apiKey: 'mock-key',
-      model: 'mock-model',
-      temperature: 0.8,
-      maxTokens: 2048,
-    }),
+async function apiJson(pathname, init) {
+  const res = await fetch(`${API}${pathname}`, init);
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${pathname} -> ${res.status} ${text.slice(0, 200)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+function dumpSettings() {
+  const db = new DatabaseSync('apps/server/data/novelforge.db');
+  const rows = db.prepare('SELECT key, value FROM settings').all();
+  db.close();
+  return rows;
+}
+function restoreSettings(rows) {
+  const db = new DatabaseSync('apps/server/data/novelforge.db');
+  db.exec('DELETE FROM settings');
+  const stmt = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+  for (const r of rows) stmt.run(r.key, r.value);
+  db.close();
+}
+
+async function ensureMock() {
+  try {
+    await fetch(`http://127.0.0.1:${MOCK_PORT}/v1/models`);
+    return null;
+  } catch {
+    /* 需要启动 */
+  }
+  const child = spawn('node', ['scripts/mock-llm.mjs', String(MOCK_PORT)], {
+    stdio: 'ignore',
+    detached: false,
   });
-  const createdBody = created.ok ? await created.json() : null;
-  const activated = createdBody
-    ? await fetch(`${API}/api/profiles/${createdBody.id}/activate`, { method: 'POST' })
-    : null;
-  check('写入 mock 模型配置', created.ok && Boolean(activated?.ok), `HTTP ${created.status}`);
+  await sleep(1500);
+  return child;
+}
 
-  const projects = await (await fetch(`${API}/api/projects`)).json();
-  const project = projects.find((p) => p.title === '长夜行') ?? projects[0];
-  check('找到演示项目', Boolean(project), project?.title);
+/** 与 mock 的 SAMPLE 对应 */
+const SAMPLE_TEXT = '外院的屋子比主宅冷得多。';
 
-  const profile = path.join(os.tmpdir(), `nf-write-${Date.now()}`);
-  const child = spawn(
-    EDGE,
-    [
-      '--headless=new',
-      '--disable-gpu',
-      '--no-sandbox',
-      `--remote-debugging-port=${PORT}`,
-      `--user-data-dir=${profile}`,
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
+async function main() {
+  const originalSettings = dumpSettings();
+  const mock = await ensureMock();
+  let chapterId = null;
 
   try {
-    // 等 DevTools
-    for (let i = 0; i < 60; i++) {
-      try {
-        const r = await fetch(`http://127.0.0.1:${PORT}/json/version`);
-        if (r.ok) break;
-      } catch {
-        /* retry */
-      }
-      await sleep(250);
-    }
-
-    const page = await (
-      await fetch(`http://127.0.0.1:${PORT}/json/new?about:blank`, { method: 'PUT' })
-    ).json();
-
-    const ws = new WebSocket(page.webSocketDebuggerUrl);
-    await new Promise((res, rej) => {
-      ws.addEventListener('open', res, { once: true });
-      ws.addEventListener('error', rej, { once: true });
+    const created = await apiJson('/api/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'E2E Mock',
+        baseUrl: `http://127.0.0.1:${MOCK_PORT}/v1`,
+        apiKey: 'mock-key',
+        model: 'mock-model',
+        temperature: 0.8,
+        maxTokens: 2048,
+      }),
     });
+    await apiJson(`/api/profiles/${created.id}/activate`, { method: 'POST' });
 
-    let msgId = 0;
-    const pending = new Map();
-    ws.addEventListener('message', (ev) => {
-      const m = JSON.parse(ev.data);
-      const p = pending.get(m.id);
-      if (p) {
-        pending.delete(m.id);
-        m.error ? p.reject(new Error(JSON.stringify(m.error))) : p.resolve(m.result);
-      }
+    const projects = await apiJson('/api/projects');
+    const project = projects.find((p) => p.title === '长夜行') ?? projects[0];
+    check('找到演示项目', Boolean(project), project?.title);
+
+    // 建一个临时章节，避免动到用户正在写的内容
+    const chapter = await apiJson(`/api/projects/${project.id}/chapters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: TMP_CHAPTER,
+        outline: '测试大纲：主角在雪夜遇到一个陌生人。',
+      }),
     });
-    const send = (method, params = {}) =>
-      new Promise((resolve, reject) => {
-        const id = ++msgId;
-        pending.set(id, { resolve, reject });
-        ws.send(JSON.stringify({ id, method, params }));
-      });
-    const evaluate = async (expression) => {
-      const r = await send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      });
-      if (r.exceptionDetails) {
-        throw new Error(r.exceptionDetails.exception?.description ?? 'eval error');
+    chapterId = chapter.id;
+
+    const profile = path.join(os.tmpdir(), `nf-write-${Date.now()}`);
+    const child = spawn(
+      EDGE,
+      [
+        '--headless=new',
+        '--disable-gpu',
+        '--no-sandbox',
+        '--window-size=1500,1000',
+        `--remote-debugging-port=${PORT}`,
+        `--user-data-dir=${profile}`,
+        'about:blank',
+      ],
+      { stdio: 'ignore' },
+    );
+
+    try {
+      for (let i = 0; i < 60; i++) {
+        try {
+          const r = await fetch(`http://127.0.0.1:${PORT}/json/version`);
+          if (r.ok) break;
+        } catch {
+          /* retry */
+        }
+        await sleep(250);
       }
-      return r.result.value;
-    };
+      const page = await (
+        await fetch(`http://127.0.0.1:${PORT}/json/new?about:blank`, { method: 'PUT' })
+      ).json();
+      const ws = new WebSocket(page.webSocketDebuggerUrl);
+      await new Promise((res, rej) => {
+        ws.addEventListener('open', res, { once: true });
+        ws.addEventListener('error', rej, { once: true });
+      });
 
-    await send('Page.enable');
-    await send('Runtime.enable');
-    await send('Page.navigate', { url: UI });
-    await sleep(4000);
+      let id = 0;
+      const pending = new Map();
+      ws.addEventListener('message', (ev) => {
+        const m = JSON.parse(ev.data);
+        const p = pending.get(m.id);
+        if (p) {
+          pending.delete(m.id);
+          m.error ? p.reject(new Error(JSON.stringify(m.error))) : p.resolve(m.result);
+        }
+      });
+      const send = (method, params = {}) =>
+        new Promise((resolve, reject) => {
+          const n = ++id;
+          pending.set(n, { resolve, reject });
+          ws.send(JSON.stringify({ id: n, method, params }));
+        });
+      const evaluate = async (expression) => {
+        const r = await send('Runtime.evaluate', {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        });
+        if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description);
+        return r.result.value;
+      };
+      const clickText = (text) =>
+        evaluate(`(() => {
+          const b = Array.from(document.querySelectorAll('button')).find(x => x.textContent.trim().includes(${JSON.stringify(text)}));
+          if (b && !b.disabled) { b.click(); return true; }
+          return false;
+        })()`);
 
-    check('页面已加载', (await evaluate('document.getElementById("root").innerHTML.length')) > 500);
+      await send('Page.enable');
+      await send('Runtime.enable');
+      await send('Page.navigate', { url: UI });
+      await sleep(4200);
 
-    // 首页是书架，先点第一本进入写作台
-    await evaluate(`(() => {
-      const card = document.querySelector('.shelf .lib-card');
-      if (card) card.click();
-      return !!card;
-    })()`);
-    await sleep(2200);
-
-    // 2. 选中一个有正文的章节（第一章）
-    await evaluate(`(() => {
-      const items = Array.from(document.querySelectorAll('.chapter-item'));
-      const t = items.find(e => e.textContent.includes('雪落祠堂'));
-      if (t) t.click();
-      return !!t;
-    })()`);
-    await sleep(1200);
-
-    const beforeLen = await evaluate('document.querySelector("textarea.fiction")?.value.length ?? 0');
-    check('章节正文已加载', beforeLen > 50, `${beforeLen} 字`);
-
-    // 3. 记录正文初始内容
-    const beforeContent = await evaluate('document.querySelector("textarea.fiction").value');
-
-    // 4. 点击「生成」
-    const clicked = await evaluate(`(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '生成');
-      if (btn) { btn.click(); return true; }
-      return false;
-    })()`);
-    check('点击生成按钮', clicked);
-
-    // 5. 等待流式结果出现（mock 每 60ms 一段）
-    let resultText = '';
-    for (let i = 0; i < 40; i++) {
-      await sleep(300);
-      resultText = await evaluate(
-        'document.querySelector(".result-box")?.textContent?.trim() ?? ""',
+      // 进入写作台
+      check(
+        '打开作品',
+        await evaluate(`(() => {
+          const card = Array.from(document.querySelectorAll('.shelf .lib-card')).find(c => c.textContent.includes('长夜行')) ?? document.querySelector('.shelf .lib-card');
+          if (card) { card.click(); return true; }
+          return false;
+        })()`),
       );
-      if (resultText.includes('柴是有的')) break;
+      await sleep(2200);
+
+      // 选中临时章节
+      check(
+        '选中临时章节',
+        await evaluate(`(() => {
+          const t = Array.from(document.querySelectorAll('.chapter-item')).find(e => e.textContent.includes(${JSON.stringify(TMP_CHAPTER)}));
+          if (t) { t.click(); return true; }
+          return false;
+        })()`),
+      );
+      await sleep(1200);
+      const emptyContent = await evaluate('document.querySelector("textarea.fiction")?.value ?? ""');
+      check('章节初始为空', emptyContent.length === 0, `${emptyContent.length} 字`);
+
+      // ── 1. 整章生成 → 替换正文 ──
+      check('点击「整章生成」', await clickText('整章生成'));
+
+      let streamed = '';
+      for (let i = 0; i < 30; i++) {
+        await sleep(300);
+        streamed = await evaluate('document.querySelector(".result-box")?.textContent ?? ""');
+        if (streamed.includes('柴是有的')) break;
+      }
+      check('整章生成有流式结果', streamed.includes(SAMPLE_TEXT), `${streamed.length} 字`);
+
+      await evaluate('window.confirm = () => true');
+      check('点击「替换正文」', await clickText('替换正文'));
+      await sleep(2200); // 等自动保存
+
+      const afterReplace = await evaluate('document.querySelector("textarea.fiction").value');
+      check(
+        '正文被整段替换（而非追加）',
+        afterReplace.includes(SAMPLE_TEXT) && afterReplace.length <= streamed.length + 5,
+        `${afterReplace.length} 字`,
+      );
+
+      const saved = await apiJson(`/api/chapters/${chapterId}`);
+      check('替换结果已落库', saved.content.includes(SAMPLE_TEXT), `${saved.wordCount} 字`);
+
+      // ── 2. 续写 → 追加到末尾 ──
+      check(
+        '切到「续写」模式',
+        await evaluate(`(() => {
+          const b = Array.from(document.querySelectorAll('.ai-tabs button')).find(x => x.textContent.trim() === '续写');
+          if (b) { b.click(); return true; }
+          return false;
+        })()`),
+      );
+      await sleep(400);
+      const beforeAppend = (await evaluate('document.querySelector("textarea.fiction").value')).length;
+
+      check('点击「生成」', await clickText('生成'));
+      let appending = '';
+      for (let i = 0; i < 30; i++) {
+        await sleep(300);
+        appending = await evaluate('document.querySelector(".result-box")?.textContent ?? ""');
+        if (appending.includes('柴是有的')) break;
+      }
+      check('续写有流式结果', appending.length > 10, `${appending.length} 字`);
+
+      check('点击「追加到末尾」', await clickText('追加到末尾'));
+      await sleep(2200);
+      const afterAppend = await evaluate('document.querySelector("textarea.fiction").value');
+      check(
+        '追加后正文变长且保留原内容',
+        afterAppend.length > beforeAppend && afterAppend.startsWith(afterReplace.slice(0, 20)),
+        `${beforeAppend} → ${afterAppend.length} 字`,
+      );
+
+      ws.close();
+    } finally {
+      child.kill();
     }
-    check('流式生成结果已渲染', resultText.length > 10, `${resultText.length} 字: ${resultText.slice(0, 40)}`);
-
-    // 6. 点击「追加到末尾」
-    const applied = await evaluate(`(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('追加到末尾'));
-      if (btn && !btn.disabled) { btn.click(); return true; }
-      return false;
-    })()`);
-    check('追加到末尾按钮可点击', applied);
-
-    await sleep(2500); // 等自动保存
-    const afterContent = await evaluate('document.querySelector("textarea.fiction").value');
-    check(
-      '生成文本已写入正文',
-      afterContent.length > beforeContent.length && afterContent.includes('外院的屋子'),
-      `${beforeContent.length} → ${afterContent.length} 字`,
-    );
-
-    // 7. 等待自动保存落库
-    await sleep(2000);
-    const chapters = await (await fetch(`${API}/api/projects/${project.id}/chapters`)).json();
-    const first = chapters.find((c) => c.title.includes('雪落祠堂'));
-    const detail = await (await fetch(`${API}/api/chapters/${first.id}`)).json();
-    check(
-      '自动保存已写入数据库',
-      detail.content.includes('外院的屋子'),
-      `库中 ${detail.wordCount} 字`,
-    );
-
-    ws.close();
   } finally {
-    child.kill();
+    if (chapterId) {
+      await fetch(`${API}/api/chapters/${chapterId}`, { method: 'DELETE' }).catch(() => {});
+    }
+    restoreSettings(originalSettings);
+    if (mock) mock.kill();
   }
 
   const failed = results.filter((r) => !r.ok);

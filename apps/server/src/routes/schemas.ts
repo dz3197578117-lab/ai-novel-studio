@@ -38,7 +38,15 @@ export const volumeInput = z.object({
 export const writeRequest = z.object({
   projectId: z.string().min(1),
   chapterId: z.string().min(1),
-  mode: z.enum(['continue', 'rewrite', 'polish', 'expand', 'style']),
+  mode: z.enum([
+    'continue',
+    'rewrite',
+    'polish',
+    'expand',
+    'style',
+    'chapter',
+    'chapter-rewrite',
+  ]),
   instruction: z.string().max(4000).optional(),
   selection: z.string().max(200_000).optional(),
   memoryBudget: z.number().int().min(500).max(50_000).optional(),
@@ -55,6 +63,28 @@ export const interviewRequest = z.object({
     )
     .min(1, '至少需要一条消息')
     .max(20),
+});
+
+/** 单章大纲重生 */
+export const chapterRegenRequest = z.object({
+  idea: z.string().max(2000).optional(),
+  title: z.string().min(1).max(200),
+  logline: z.string().max(500).optional(),
+  volumes: z
+    .array(z.object({ title: z.string().max(200), summary: z.string().max(20_000) }))
+    .max(20),
+  chapters: z
+    .array(
+      z.object({
+        volumeIndex: z.number().int().min(0).max(30),
+        title: z.string().max(200),
+        outline: z.string().max(20_000),
+      }),
+    )
+    .min(1)
+    .max(1000),
+  index: z.number().int().min(0).max(999),
+  instruction: z.string().max(1000).optional(),
 });
 
 /** 一套模型配置 */

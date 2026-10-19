@@ -13,6 +13,7 @@ import {
   updateVolume,
 } from '../repos/chapters.repo.js';
 import { getProject, touchProject } from '../repos/projects.repo.js';
+import { archiveDeleted } from '../repos/backup.js';
 import { chapterInput, volumeInput } from './schemas.js';
 
 export async function chapterRoutes(app: FastifyInstance): Promise<void> {
@@ -109,7 +110,11 @@ export async function chapterRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { id: string } }>('/api/chapters/:id', async (req, reply) => {
-    const ok = deleteChapter(req.params.id);
+    const chapter = getChapter(req.params.id);
+    if (!chapter) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
+    // 正文可能很长，删前留档
+    archiveDeleted('chapter', { deletedAt: new Date().toISOString(), chapter });
+    const ok = deleteChapter(chapter.id);
     if (!ok) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
     return { ok: true };
   });
