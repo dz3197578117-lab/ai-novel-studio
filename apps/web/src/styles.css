@@ -802,6 +802,67 @@ input[type='number']::-webkit-inner-spin-button {
   padding-top: 10px;
 }
 
+/* ── 一致性检查结果 ── */
+.issue-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--bg);
+  border-left-width: 3px;
+}
+.issue-card.sev-high {
+  border-left-color: var(--danger);
+}
+.issue-card.sev-medium {
+  border-left-color: var(--accent);
+}
+.issue-card.sev-low {
+  border-left-color: #5a6473;
+}
+.issue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.issue-sev {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  border: 1px solid currentColor;
+}
+.issue-sev.sev-high {
+  color: var(--danger);
+}
+.issue-sev.sev-medium {
+  color: var(--accent);
+}
+.issue-sev.sev-low {
+  color: var(--muted);
+}
+.issue-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.issue-detail {
+  font-size: 12px;
+  color: #b6bdc9;
+  line-height: 1.7;
+  margin-top: 2px;
+}
+.issue-suggest {
+  font-size: 12px;
+  color: var(--ok);
+  line-height: 1.7;
+  margin-top: 4px;
+}
+.issue-refs {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
 /* ── 作品库 ── */
 .lib-grid {
   display: grid;

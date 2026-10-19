@@ -135,9 +135,10 @@ async function main() {
     const editorOnShelf = await cdp.eval('!!document.querySelector(".editor-body")');
     check('书架上不显示编辑器', editorOnShelf === false);
 
-    // 3. 点书进入写作台
+    // 3. 点书进入写作台（按书名定位，避免多本书时点错）
     const entered = await cdp.eval(`(() => {
-      const card = document.querySelector('.shelf .lib-card');
+      const cards = Array.from(document.querySelectorAll('.shelf .lib-card'));
+      const card = cards.find(c => c.textContent.includes('长夜行')) ?? cards[0];
       if (!card) return false;
       card.click();
       return true;

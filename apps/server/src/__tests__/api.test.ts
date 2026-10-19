@@ -523,6 +523,79 @@ describe('模型配置（多套）', () => {
   });
 });
 
+describe('一致性引擎（伏笔 / 时间线 / 检查）', () => {
+  let projectId = '';
+
+  before(async () => {
+    const res = await post('/api/projects', { title: '一致性测试' });
+    projectId = JSON.parse(res.body).id;
+  });
+
+  test('新增伏笔并列出', async () => {
+    const res = await post(`/api/projects/${projectId}/foreshadows`, {
+      title: '北境的塔',
+      detail: '父亲临终前提过',
+      importance: 3,
+    });
+    assert.equal(res.statusCode, 201);
+    const f = JSON.parse(res.body);
+    assert.equal(f.title, '北境的塔');
+    assert.equal(f.status, 'planted');
+
+    const list = JSON.parse((await get(`/api/projects/${projectId}/foreshadows`)).body);
+    assert.equal(list.length, 1);
+  });
+
+  test('把伏笔标记为已回收', async () => {
+    const list = JSON.parse((await get(`/api/projects/${projectId}/foreshadows`)).body);
+    const res = await patch(`/api/foreshadows/${list[0].id}`, { status: 'recovered' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).status, 'recovered');
+  });
+
+  test('拒绝空标题的伏笔', async () => {
+    const res = await post(`/api/projects/${projectId}/foreshadows`, { title: '' });
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('新增与删除时间线事件', async () => {
+    const res = await post(`/api/projects/${projectId}/timeline`, {
+      storyTime: '第三年·冬',
+      title: '试剑夺魁',
+    });
+    assert.equal(res.statusCode, 201);
+    const ev = JSON.parse(res.body);
+    assert.equal(ev.storyTime, '第三年·冬');
+
+    const removed = await del(`/api/timeline/${ev.id}`);
+    assert.equal(removed.statusCode, 200);
+    const list = JSON.parse((await get(`/api/projects/${projectId}/timeline`)).body);
+    assert.equal(list.length, 0);
+  });
+
+  test('不存在的作品返回 404', async () => {
+    const res = await get('/api/projects/does-not-exist/foreshadows');
+    assert.equal(res.statusCode, 404);
+  });
+
+  test('未配置模型时一致性检查返回 412', async () => {
+    // 造一个没有 Key 的配置并设为当前
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '检查用无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+    const res = await post(`/api/projects/${projectId}/consistency-check`);
+    assert.equal(res.statusCode, 412);
+  });
+});
+
 describe('未配置模型时的写作接口', () => {
   test('当前配置没有 Key 时写作返回 412', async () => {
     // 造一个没有 Key 的配置并设为当前

@@ -9,8 +9,9 @@ import { SettingsDialog } from './components/SettingsDialog';
 import { ExportDialog } from './components/ExportDialog';
 import { ImageDialog } from './components/ImageDialog';
 import { ShelfPage } from './components/ShelfPage';
+import { ConsistencyPanel } from './components/ConsistencyPanel';
 
-type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | null;
+type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | 'consistency' | null;
 
 /** 书架（主页） / 写作台 */
 type View = 'shelf' | 'workspace';
@@ -73,6 +74,7 @@ export function App() {
           <SettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} />
           <ExportDialog open={dialog === 'export'} onClose={() => setDialog(null)} />
           <ImageDialog open={dialog === 'image'} onClose={() => setDialog(null)} />
+          <ConsistencyPanel open={dialog === 'consistency'} onClose={() => setDialog(null)} />
         </div>
       )}
 
@@ -106,6 +108,9 @@ function TopBar({
       </button>
       <button className="ghost" onClick={() => onOpen('entities')} disabled={!hasProject}>
         📚 设定库
+      </button>
+      <button className="ghost" onClick={() => onOpen('consistency')} disabled={!hasProject}>
+        🧩 设定中心
       </button>
       <button className="ghost" onClick={() => onOpen('image')} disabled={!hasProject}>
         🎨 配图

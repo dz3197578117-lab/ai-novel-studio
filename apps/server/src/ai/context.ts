@@ -1,6 +1,7 @@
 import type { Chapter, MemoryUsage, Project, WriteMode } from '@novelforge/shared';
 import { listPinnedEntities } from '../repos/entities.repo.js';
 import { listPriorSummaries, listVolumes } from '../repos/chapters.repo.js';
+import { listOpenForeshadows, listTimeline } from '../repos/consistency.repo.js';
 
 export interface BuiltContext {
   system: string;
@@ -76,7 +77,45 @@ export function buildContext(params: {
     }
   }
 
-  // 2. 卷摘要
+  // 2. 未回收的伏笔（长篇一致性的核心：让模型知道哪些坑还没填）
+  const openForeshadows = listOpenForeshadows(project.id, 12);
+  if (openForeshadows.length > 0) {
+    const lines: string[] = [];
+    for (const f of openForeshadows) {
+      const line = `- ${f.title}${f.detail ? `：${f.detail.slice(0, 80)}` : ''}`;
+      if (line.length > remaining) break;
+      remaining -= line.length;
+      lines.push(line);
+    }
+    if (lines.length) {
+      memoryUsed.push({
+        kind: 'entity',
+        label: `${lines.length} 条未回收伏笔`,
+        chars: lines.join('\n').length,
+      });
+      blocks.push(
+        `## 尚未回收的伏笔（可以呼应或铺垫，但不要提前揭晓、也不要与已写内容矛盾）\n${lines.join('\n')}`,
+      );
+    }
+  }
+
+  // 3. 关键时间点（防止时间线前后矛盾）
+  const keyEvents = listTimeline(project.id)
+    .filter((t) => t.importance >= 2)
+    .slice(0, 8);
+  if (keyEvents.length > 0) {
+    const lines = keyEvents.map(
+      (t) => `- ${t.storyTime || '（未标时间）'}：${t.title}`,
+    );
+    const joined = lines.join('\n');
+    if (joined.length <= remaining) {
+      remaining -= joined.length;
+      memoryUsed.push({ kind: 'style', label: `${lines.length} 条关键时间点`, chars: joined.length });
+      blocks.push(`## 关键时间点（保持时间先后一致）\n${joined}`);
+    }
+  }
+
+  // 4. 卷摘要
   if (chapter.volumeId) {
     const vol = listVolumes(project.id).find((v) => v.id === chapter.volumeId);
     const s = vol?.summary ? take('volume-summary', vol.title, vol.summary) : null;

@@ -101,6 +101,40 @@ function migrate(d: DatabaseSync): void {
     version = 1;
   }
 
+  if (version < 2) {
+    // 一致性引擎：伏笔台账 + 时间线
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS foreshadows (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        planted_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        planned_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        recovered_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'planted',
+        importance INTEGER NOT NULL DEFAULT 2,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_foreshadows_project ON foreshadows(project_id, status);
+
+      CREATE TABLE IF NOT EXISTS timeline_events (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        story_time TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        importance INTEGER NOT NULL DEFAULT 2,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_timeline_project ON timeline_events(project_id);
+    `);
+    version = 2;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
 }
 

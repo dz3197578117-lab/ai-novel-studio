@@ -120,7 +120,8 @@ const server = http.createServer((req, res) => {
       const isDraftRequest = /网络小说策划/.test(system?.content ?? '');
       // 分批生成章节大纲
       const isBatchRequest = /编写章节大纲/.test(system?.content ?? '');
-      // 单章大纲重生
+      // 一致性检查
+      const isCheckRequest = /检查长篇连载/.test(system?.content ?? '');
       const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
       // 对话式访谈：第一轮反问，第二轮给结论
       const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
@@ -134,7 +135,28 @@ const server = http.createServer((req, res) => {
       );
 
       let content = SAMPLE.join('');
-      if (isRegenRequest) {
+      if (isCheckRequest) {
+        content = JSON.stringify({
+          issues: [
+            {
+              kind: 'character',
+              severity: 'high',
+              title: '主角性格前后不一致',
+              detail: '设定里林尘沉默寡言，但第三章突然变得油嘴滑舌。',
+              suggestion: '把第三章的对话改回简短、克制的表达。',
+              refs: ['林尘', '第三章 · 药阁少女'],
+            },
+            {
+              kind: 'foreshadow',
+              severity: 'medium',
+              title: '伏笔「北境的塔」尚未回收',
+              detail: '第二章埋下，至今未提。',
+              suggestion: '在近期章节安排一次呼应，或标记为放弃。',
+              refs: ['北境的塔'],
+            },
+          ],
+        });
+      } else if (isRegenRequest) {
         const n = /第\s*(\d+)\s*章/.exec(system?.content ?? '')?.[1] ?? '1';
         content = JSON.stringify({
           volumeIndex: 0,

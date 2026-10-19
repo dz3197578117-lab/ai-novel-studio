@@ -87,6 +87,26 @@ export const chapterRegenRequest = z.object({
   instruction: z.string().max(1000).optional(),
 });
 
+/** 伏笔台账 */
+export const foreshadowInput = z.object({
+  title: z.string().min(1).max(120),
+  detail: z.string().max(4000).optional(),
+  plantedChapterId: z.string().nullable().optional(),
+  plannedChapterId: z.string().nullable().optional(),
+  recoveredChapterId: z.string().nullable().optional(),
+  status: z.enum(['planted', 'recovered', 'abandoned']).optional(),
+  importance: z.number().int().min(1).max(3).optional(),
+});
+
+/** 时间线事件 */
+export const timelineInput = z.object({
+  storyTime: z.string().max(120).optional(),
+  title: z.string().min(1).max(120),
+  detail: z.string().max(4000).optional(),
+  chapterId: z.string().nullable().optional(),
+  importance: z.number().int().min(1).max(3).optional(),
+});
+
 /** 一套模型配置 */
 export const profileInput = z.object({
   name: z.string().min(1, '给这套配置起个名字').max(60),

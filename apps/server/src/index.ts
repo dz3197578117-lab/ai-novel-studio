@@ -15,6 +15,7 @@ import { settingsRoutes } from './routes/settings.routes.js';
 import { exportRoutes } from './routes/export.routes.js';
 import { imageRoutes } from './routes/images.routes.js';
 import { draftRoutes } from './routes/draft.routes.js';
+import { consistencyRoutes } from './routes/consistency.routes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,6 +44,7 @@ export async function buildServer() {
   await app.register(exportRoutes);
   await app.register(imageRoutes);
   await app.register(draftRoutes);
+  await app.register(consistencyRoutes);
 
   app.get('/api/health', async () => ({ ok: true, dataDir: DATA_DIR }));
 

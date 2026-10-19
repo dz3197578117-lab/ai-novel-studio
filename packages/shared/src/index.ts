@@ -210,6 +210,92 @@ export interface ChatMessage {
   content: string;
 }
 
+// ─────────────────────────── 一致性引擎 ───────────────────────────
+
+export type ForeshadowStatus = 'planted' | 'recovered' | 'abandoned';
+
+/** 伏笔台账：埋了什么、在哪章、计划何时回收 */
+export interface Foreshadow extends Timestamped {
+  id: ID;
+  projectId: ID;
+  title: string;
+  detail: string;
+  /** 埋点所在章节 */
+  plantedChapterId: ID | null;
+  /** 计划回收的章节 */
+  plannedChapterId: ID | null;
+  /** 实际回收的章节 */
+  recoveredChapterId: ID | null;
+  status: ForeshadowStatus;
+  /** 1=次要 2=重要 3=核心 */
+  importance: number;
+}
+
+export interface ForeshadowInput {
+  title: string;
+  detail?: string;
+  plantedChapterId?: ID | null;
+  plannedChapterId?: ID | null;
+  recoveredChapterId?: ID | null;
+  status?: ForeshadowStatus;
+  importance?: number;
+}
+
+/** 时间线事件 */
+export interface TimelineEvent extends Timestamped {
+  id: ID;
+  projectId: ID;
+  /** 故事内时间描述，如「第三年·冬」 */
+  storyTime: string;
+  title: string;
+  detail: string;
+  chapterId: ID | null;
+  importance: number;
+}
+
+export interface TimelineInput {
+  storyTime?: string;
+  title: string;
+  detail?: string;
+  chapterId?: ID | null;
+  importance?: number;
+}
+
+export type IssueSeverity = 'low' | 'medium' | 'high';
+export type IssueKind =
+  | 'character'    // 人物性格/动机突变
+  | 'timeline'     // 时间线矛盾
+  | 'setting'      // 设定吃书
+  | 'naming'       // 称呼/姓名不一致
+  | 'plot'         // 情节逻辑
+  | 'foreshadow'   // 伏笔问题
+  | 'other';
+
+export interface ConsistencyIssue {
+  kind: IssueKind;
+  severity: IssueSeverity;
+  /** 一句话说清问题 */
+  title: string;
+  /** 具体说明：哪里矛盾、和什么冲突 */
+  detail: string;
+  /** 可操作的修改建议 */
+  suggestion: string;
+  /** 涉及章节标题或设定名，便于定位 */
+  refs: string[];
+}
+
+export interface ConsistencyReport {
+  issues: ConsistencyIssue[];
+  /** 参与检查的章节数、设定数等，便于判断检查范围 */
+  scope: {
+    chapters: number;
+    entities: number;
+    foreshadows: number;
+    timeline: number;
+  };
+  createdAt: string;
+}
+
 // ─────────────────────────── AI 生成整本小说 ───────────────────────────
 
 /** 对话式需求访谈中的一条消息 */
