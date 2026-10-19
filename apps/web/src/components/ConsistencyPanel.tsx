@@ -3,13 +3,15 @@ import type {
   ConsistencyIssue,
   ConsistencyReport,
   Foreshadow,
+  KnowledgeDoc,
+  KnowledgeHit,
   TimelineEvent,
 } from '@novelforge/shared';
 import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import { Modal } from './Modal';
 
-type Tab = 'foreshadow' | 'timeline' | 'check';
+type Tab = 'brainstorm' | 'foreshadow' | 'timeline' | 'knowledge' | 'check';
 
 const STATUS_LABEL: Record<string, string> = {
   planted: '未回收',
@@ -42,10 +44,21 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const chapters = useNovel((s) => s.chapters);
   const setError = useNovel((s) => s.setError);
 
-  const [tab, setTab] = useState<Tab>('foreshadow');
+  const [tab, setTab] = useState<Tab>('brainstorm');
   const [foreshadows, setForeshadows] = useState<Foreshadow[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
   const [busy, setBusy] = useState(false);
+
+  // 脑暴板
+  const [brainstorm, setBrainstorm] = useState('');
+
+  // 知识库
+  const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
+  const [kTitle, setKTitle] = useState('');
+  const [kContent, setKContent] = useState('');
+  const [kSource, setKSource] = useState('');
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<KnowledgeHit[]>([]);
 
   // 新增表单
   const [fsTitle, setFsTitle] = useState('');
@@ -68,12 +81,15 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const load = useCallback(async () => {
     if (!project) return;
     try {
-      const [fs, tl] = await Promise.all([
+      const [fs, tl, ds] = await Promise.all([
         api.get<Foreshadow[]>(`/api/projects/${project.id}/foreshadows`),
         api.get<TimelineEvent[]>(`/api/projects/${project.id}/timeline`),
+        api.get<KnowledgeDoc[]>(`/api/projects/${project.id}/knowledge`),
       ]);
       setForeshadows(fs);
       setTimeline(tl);
+      setDocs(ds);
+      setBrainstorm(project.brainstorm ?? '');
     } catch (e) {
       setError((e as Error).message);
     }
@@ -81,12 +97,78 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
 
   useEffect(() => {
     if (!open) return;
-    setTab('foreshadow');
+    setTab('brainstorm');
     setReport(null);
+    setQuery('');
+    setHits([]);
     void load();
   }, [open, load]);
 
   if (!project) return null;
+
+  async function saveBrainstorm() {
+    setBusy(true);
+    try {
+      await api.patch(`/api/projects/${project!.id}`, { brainstorm });
+      await useNovel.getState().selectProject(project!.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addDoc(text: string, title: string, source: string) {
+    if (!text.trim()) return;
+    setBusy(true);
+    try {
+      await api.post(`/api/projects/${project!.id}/knowledge`, {
+        title: title.trim() || '未命名资料',
+        source,
+        content: text,
+      });
+      setKTitle('');
+      setKContent('');
+      setKSource('');
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeDoc(id: string) {
+    if (!confirm('删除这份资料？')) return;
+    setBusy(true);
+    try {
+      await api.del(`/api/knowledge/${id}`);
+      await load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doSearch() {
+    try {
+      const r = await api.get<{ hits: KnowledgeHit[] }>(
+        `/api/projects/${project!.id}/knowledge/search?q=${encodeURIComponent(query)}`,
+      );
+      setHits(r.hits);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    await addDoc(text, file.name.replace(/\.[^.]+$/, ''), file.name);
+    e.target.value = '';
+  }
 
   async function addForeshadow() {
     if (!fsTitle.trim()) return;
@@ -188,16 +270,147 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   return (
     <Modal open={open} onClose={onClose} title="设定中心" wide>
       <div className="ai-tabs" style={{ padding: '0 0 10px', borderBottom: '1px solid var(--border)' }}>
+        <button className={tab === 'brainstorm' ? 'active' : ''} onClick={() => setTab('brainstorm')}>
+          脑暴
+        </button>
         <button className={tab === 'foreshadow' ? 'active' : ''} onClick={() => setTab('foreshadow')}>
           伏笔台账{openCount > 0 ? `（${openCount}）` : ''}
         </button>
         <button className={tab === 'timeline' ? 'active' : ''} onClick={() => setTab('timeline')}>
           时间线
         </button>
+        <button className={tab === 'knowledge' ? 'active' : ''} onClick={() => setTab('knowledge')}>
+          知识库{docs.length > 0 ? `（${docs.length}）` : ''}
+        </button>
         <button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}>
           一致性检查
         </button>
       </div>
+
+      {/* ── 脑暴 ── */}
+      {tab === 'brainstorm' && (
+        <div className="settings-section">
+          <p className="hint" style={{ marginTop: 0 }}>
+            零散的灵感、点子、对话片段都丢这里，不要求结构。之后可以据此整理大纲。
+          </p>
+          <div className="field">
+            <textarea
+              rows={10}
+              value={brainstorm}
+              onChange={(e) => setBrainstorm(e.target.value)}
+              placeholder={
+                '想到什么写什么，例如：\n- 主角的剑其实是他父亲的脊椎\n- 想写一场雨夜的对峙，两人都不说真话\n- 第三卷让女主先背叛一次'
+              }
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <button className="primary" onClick={() => void saveBrainstorm()} disabled={busy}>
+              保存脑暴
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── 知识库 ── */}
+      {tab === 'knowledge' && (
+        <div className="settings-section">
+          <p className="hint" style={{ marginTop: 0 }}>
+            上传设定集、参考文档、风格样本（.txt / .md）。写作时会按本章大纲自动检索相关片段注入，
+            并在提示词里标明「作者资料」来源——模型自由发挥的内容不会和你的设定混为一谈。
+          </p>
+
+          <div className="field">
+            <label>上传文件（.txt / .md）</label>
+            <input type="file" accept=".txt,.md,.markdown" onChange={(e) => void onPickFile(e)} />
+          </div>
+
+          <div className="row">
+            <div className="field" style={{ flex: 1 }}>
+              <label>或直接粘贴资料标题</label>
+              <input value={kTitle} onChange={(e) => setKTitle(e.target.value)} placeholder="如：世界观设定集" />
+            </div>
+            <div className="field" style={{ flex: 2 }}>
+              <label>来源标注（可空）</label>
+              <input value={kSource} onChange={(e) => setKSource(e.target.value)} placeholder="如：作者笔记.md" />
+            </div>
+          </div>
+          <div className="field">
+            <label>资料内容</label>
+            <textarea
+              rows={4}
+              value={kContent}
+              onChange={(e) => setKContent(e.target.value)}
+              placeholder="粘贴设定、参考文本或风格样本…"
+            />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+            <button
+              className="primary"
+              onClick={() => void addDoc(kContent, kTitle, kSource)}
+              disabled={busy || !kContent.trim()}
+            >
+              ＋ 加入知识库
+            </button>
+          </div>
+
+          <div className="field">
+            <label>检索测试（确认写作时会引用到哪些片段）</label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="输入关键词，如：北境 塔"
+                style={{ flex: 1 }}
+              />
+              <button onClick={() => void doSearch()} disabled={!query.trim()}>
+                检索
+              </button>
+            </div>
+          </div>
+
+          {hits.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              {hits.map((h, i) => (
+                <div className="scene-card" key={`${h.docId}-${h.chunkIndex}-${i}`}>
+                  <div className="scene-head">
+                    <span className="tag">{h.score} 分</span>
+                    <span className="scene-title">
+                      {h.docTitle}
+                      {h.source ? ` · ${h.source}` : ''}
+                    </span>
+                  </div>
+                  <div className="scene-row">{h.text.slice(0, 200)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {docs.length === 0 && <div className="empty">知识库还是空的</div>}
+          {docs.map((d) => (
+            <div className="profile-row" key={d.id}>
+              <div className="profile-main">
+                <div className="profile-name">
+                  {d.title}
+                  <span className="tag">{d.chunkCount} 段</span>
+                </div>
+                <div className="profile-meta">
+                  {d.source || '未标来源'} · {d.content.length} 字
+                </div>
+              </div>
+              <div className="profile-actions">
+                <button
+                  className="danger"
+                  style={{ padding: '3px 10px', fontSize: 12 }}
+                  disabled={busy}
+                  onClick={() => void removeDoc(d.id)}
+                >
+                  删除
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── 伏笔 ── */}
       {tab === 'foreshadow' && (

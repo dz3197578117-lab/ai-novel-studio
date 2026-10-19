@@ -122,6 +122,9 @@ const server = http.createServer((req, res) => {
       const isBatchRequest = /编写章节大纲/.test(system?.content ?? '');
       // 一致性检查
       const isCheckRequest = /检查长篇连载/.test(system?.content ?? '');
+      // 分层创作：大纲→细纲、细纲→场景卡
+      const isBeatsRequest = /小说结构编辑/.test(system?.content ?? '');
+      const isScenesRequest = /小说场景设计师/.test(system?.content ?? '');
       const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
       // 对话式访谈：第一轮反问，第二轮给结论
       const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
@@ -135,7 +138,36 @@ const server = http.createServer((req, res) => {
       );
 
       let content = SAMPLE.join('');
-      if (isCheckRequest) {
+      if (isBeatsRequest) {
+        content =
+          '1. 【祠堂/除名】林尘跪在雪中听家主宣读除籍 → 他失去族籍\n' +
+          '2. 【沉默】二叔经过却不发一言 → 家族彻底凉薄\n' +
+          '3. 【离开】他起身走出祠堂 → 回望灯火，决心查父案\n' +
+          '4. 【钩子】门槛下摸出半截断剑 → 剑中剑意低鸣';
+      } else if (isScenesRequest) {
+        content = JSON.stringify({
+          scenes: [
+            {
+              title: '祠堂除名',
+              pov: '林尘',
+              location: '祠堂前',
+              goal: '保住族籍',
+              conflict: '家主已定罪，族人无人说话',
+              outcome: '被逐出主宅',
+              keyLines: '「念你年幼，不予追究。」',
+            },
+            {
+              title: '断剑低鸣',
+              pov: '林尘',
+              location: '外院废宅',
+              goal: '找父亲遗物',
+              conflict: '屋内被人翻找过',
+              outcome: '拿到残剑，感到熟悉剑意',
+              keyLines: '「留给心不细的人。」',
+            },
+          ],
+        });
+      } else if (isCheckRequest) {
         content = JSON.stringify({
           issues: [
             {

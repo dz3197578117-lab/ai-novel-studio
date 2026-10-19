@@ -802,6 +802,37 @@ input[type='number']::-webkit-inner-spin-button {
   padding-top: 10px;
 }
 
+/* ── 分层创作：场景卡 ── */
+.scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.scene-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding: 7px 10px;
+  background: var(--bg);
+  font-size: 12px;
+}
+.scene-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+.scene-title {
+  font-weight: 600;
+  color: #c3c9d3;
+}
+.scene-row {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 /* ── 一致性检查结果 ── */
 .issue-card {
   border: 1px solid var(--border);

@@ -523,6 +523,102 @@ describe('模型配置（多套）', () => {
   });
 });
 
+describe('分层创作与知识库', () => {
+  let projectId = '';
+  let chapterId = '';
+
+  before(async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '分层测试' })).body);
+    projectId = p.id;
+    const c = JSON.parse(
+      (await post(`/api/projects/${projectId}/chapters`, { title: '第一章' })).body,
+    );
+    chapterId = c.id;
+  });
+
+  test('脑暴板可保存', async () => {
+    const res = await patch(`/api/projects/${projectId}`, { brainstorm: '- 主角的剑是他父亲的脊椎' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).brainstorm, '- 主角的剑是他父亲的脊椎');
+  });
+
+  test('细纲可保存并读回', async () => {
+    const res = await patch(`/api/chapters/${chapterId}`, { beats: '1. 祠堂除名 → 林尘被逐出' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).beats, '1. 祠堂除名 → 林尘被逐出');
+    const got = JSON.parse((await get(`/api/chapters/${chapterId}`)).body);
+    assert.match(got.beats, /祠堂除名/);
+  });
+
+  test('场景卡可增删改查', async () => {
+    const created = await post(`/api/chapters/${chapterId}/scenes`, {
+      title: '祠堂除名',
+      pov: '林尘',
+      goal: '保住族籍',
+      conflict: '家主定罪',
+      outcome: '被逐出',
+    });
+    assert.equal(created.statusCode, 201);
+    const scene = JSON.parse(created.body);
+    assert.equal(scene.title, '祠堂除名');
+
+    const list = JSON.parse((await get(`/api/chapters/${chapterId}/scenes`)).body);
+    assert.equal(list.length, 1);
+
+    const updated = await patch(`/api/scenes/${scene.id}`, { outcome: '被逐出并失去族籍' });
+    assert.equal(updated.statusCode, 200);
+    assert.match(JSON.parse(updated.body).outcome, /失去族籍/);
+
+    const removed = await del(`/api/scenes/${scene.id}`);
+    assert.equal(removed.statusCode, 200);
+    assert.equal(JSON.parse((await get(`/api/chapters/${chapterId}/scenes`)).body).length, 0);
+  });
+
+  test('知识库可上传并检索到片段', async () => {
+    const created = await post(`/api/projects/${projectId}/knowledge`, {
+      title: '世界观设定集',
+      source: '作者笔记.md',
+      content:
+        '北域常年积雪，冬季长达半年。修行界以「境」分层次：引气、凝脉、铸骨、通神、化虚。\n\n北境有一座塔，塔中封着上一代的剑意。',
+    });
+    assert.equal(created.statusCode, 201);
+    const doc = JSON.parse(created.body);
+    assert.ok(doc.chunkCount >= 1);
+
+    const search = JSON.parse(
+      (await get(`/api/projects/${projectId}/knowledge/search?q=${encodeURIComponent('北境 塔')}`))
+        .body,
+    );
+    assert.ok(search.hits.length >= 1, '应检索到片段');
+    assert.match(search.hits[0].text, /塔|北境/);
+    assert.equal(search.hits[0].source, '作者笔记.md');
+
+    const list = JSON.parse((await get(`/api/projects/${projectId}/knowledge`)).body);
+    assert.equal(list.length, 1);
+
+    const removed = await del(`/api/knowledge/${doc.id}`);
+    assert.equal(removed.statusCode, 200);
+  });
+
+  test('未配置模型时生成细纲返回 412', async () => {
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '分层无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+    const res = await post('/api/ai/chapter-beats', { projectId, chapterId });
+    assert.equal(res.statusCode, 412);
+    const res2 = await post('/api/ai/scene-cards', { projectId, chapterId });
+    assert.equal(res2.statusCode, 412);
+  });
+});
+
 describe('一致性引擎（伏笔 / 时间线 / 检查）', () => {
   let projectId = '';
 

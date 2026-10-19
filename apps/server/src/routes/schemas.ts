@@ -7,6 +7,7 @@ export const projectInput = z.object({
   targetWords: z.number().int().min(0).max(100_000_000).optional(),
   status: z.enum(['drafting', 'paused', 'finished', 'archived']).optional(),
   styleGuide: z.string().max(4000).optional(),
+  brainstorm: z.string().max(100_000).optional(),
 });
 
 export const entityInput = z.object({
@@ -28,6 +29,26 @@ export const chapterInput = z.object({
   outline: z.string().max(20_000).optional(),
   content: z.string().max(2_000_000).optional(),
   status: z.enum(['outline', 'drafting', 'revising', 'done']).optional(),
+  beats: z.string().max(50_000).optional(),
+});
+
+/** 场景卡 */
+export const sceneInput = z.object({
+  title: z.string().min(1).max(120),
+  pov: z.string().max(60).optional(),
+  location: z.string().max(60).optional(),
+  goal: z.string().max(500).optional(),
+  conflict: z.string().max(500).optional(),
+  outcome: z.string().max(500).optional(),
+  keyLines: z.string().max(1000).optional(),
+});
+
+/** 知识库文档 */
+export const knowledgeInput = z.object({
+  title: z.string().min(1).max(200),
+  source: z.string().max(300).optional(),
+  tags: z.array(z.string().max(40)).max(20).optional(),
+  content: z.string().min(1).max(500_000),
 });
 
 export const volumeInput = z.object({

@@ -40,6 +40,8 @@ export interface Project extends Timestamped {
   status: ProjectStatus;
   /** 默认文风设定（注入到每次生成） */
   styleGuide: string;
+  /** 脑暴板：零散的灵感、点子、聊天记录（Markdown） */
+  brainstorm?: string;
 }
 
 /** 作品库列表项：附统计信息，供「小说管理」视图使用 */
@@ -118,6 +120,8 @@ export interface Chapter extends Timestamped {
   wordCount: number;
   /** 本章的长期记忆摘要，写完由 AI 生成，供后续章节注入 */
   summary: string;
+  /** 细纲：把本章大纲拆成逐拍的动作/冲突（Markdown） */
+  beats?: string;
 }
 
 // ─────────────────────────── AI 配置与生成 ───────────────────────────
@@ -208,6 +212,71 @@ export interface WriteRequest {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+// ─────────────────────────── 分层创作：场景卡 ───────────────────────────
+
+/** 场景卡：把一章拆成若干可写的场景 */
+export interface Scene extends Timestamped {
+  id: ID;
+  projectId: ID;
+  chapterId: ID;
+  order: number;
+  /** 场景标题，如「祠堂除名」 */
+  title: string;
+  /** 视角人物 */
+  pov: string;
+  location: string;
+  /** 场景目标：这一场要达成什么 */
+  goal: string;
+  /** 冲突/阻力 */
+  conflict: string;
+  /** 结果与钩子 */
+  outcome: string;
+  /** 场景里想用的关键台词 */
+  keyLines: string;
+}
+
+export interface SceneInput {
+  title: string;
+  pov?: string;
+  location?: string;
+  goal?: string;
+  conflict?: string;
+  outcome?: string;
+  keyLines?: string;
+}
+
+// ─────────────────────────── 知识库 ───────────────────────────
+
+/** 作者资料（设定集/参考文档/风格样本） */
+export interface KnowledgeDoc extends Timestamped {
+  id: ID;
+  projectId: ID;
+  title: string;
+  /** 来源标记，如「设定集.txt」 */
+  source: string;
+  tags: string[];
+  /** 纯文本内容 */
+  content: string;
+  chunkCount: number;
+}
+
+export interface KnowledgeDocInput {
+  title: string;
+  source?: string;
+  tags?: string[];
+  content: string;
+}
+
+/** 检索命中的片段，用于引用溯源 */
+export interface KnowledgeHit {
+  docId: ID;
+  docTitle: string;
+  source: string;
+  chunkIndex: number;
+  text: string;
+  score: number;
 }
 
 // ─────────────────────────── 一致性引擎 ───────────────────────────

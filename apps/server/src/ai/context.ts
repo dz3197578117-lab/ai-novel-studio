@@ -2,6 +2,8 @@ import type { Chapter, MemoryUsage, Project, WriteMode } from '@novelforge/share
 import { listPinnedEntities } from '../repos/entities.repo.js';
 import { listPriorSummaries, listVolumes } from '../repos/chapters.repo.js';
 import { listOpenForeshadows, listTimeline } from '../repos/consistency.repo.js';
+import { listScenes, searchKnowledge } from '../repos/layers.repo.js';
+import { scenesToText } from './layers.js';
 
 export interface BuiltContext {
   system: string;
@@ -146,6 +148,43 @@ export function buildContext(params: {
   if (chapter.outline.trim()) {
     blocks.push(`## 本章大纲（必须遵守）\n${chapter.outline.trim()}`);
     memoryUsed.push({ kind: 'style', label: '本章大纲', chars: chapter.outline.length });
+  }
+
+  // 4.1 细纲（把大纲拆成节拍，层次更细）
+  if (chapter.beats?.trim()) {
+    blocks.push(`## 本章细纲（按这些节拍写，不要跳跃）\n${chapter.beats.trim()}`);
+    memoryUsed.push({ kind: 'style', label: '本章细纲', chars: chapter.beats.length });
+  }
+
+  // 4.2 场景卡（目标-阻力-结果）
+  const scenes = listScenes(chapter.id);
+  if (scenes.length > 0) {
+    const text = scenesToText(scenes);
+    if (text.length <= remaining) {
+      remaining -= text.length;
+      blocks.push(`## 场景安排（按顺序推进）\n${text}`);
+      memoryUsed.push({ kind: 'style', label: `${scenes.length} 个场景`, chars: text.length });
+    }
+  }
+
+  // 4.3 作者资料（引用溯源：明确标出来自哪份资料）
+  const hits = searchKnowledge(project.id, `${chapter.title} ${chapter.outline.slice(0, 200)}`, 3);
+  if (hits.length > 0) {
+    const lines = hits.map(
+      (h) => `- 〔${h.docTitle}${h.source ? ` · ${h.source}` : ''}〕${h.text.slice(0, 300)}`,
+    );
+    const joined = lines.join('\n');
+    if (joined.length <= remaining) {
+      remaining -= joined.length;
+      blocks.push(
+        `## 作者资料（引用片段，以作者设定为准，不要自行改写其中的事实）\n${joined}`,
+      );
+      memoryUsed.push({
+        kind: 'entity',
+        label: `${hits.length} 条资料引用`,
+        chars: joined.length,
+      });
+    }
   }
 
   // 5. 文风与硬约束

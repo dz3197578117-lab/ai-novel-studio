@@ -9,6 +9,7 @@ interface ProjectRow {
   target_words: number;
   status: ProjectStatus;
   style_guide: string;
+  brainstorm: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -22,6 +23,7 @@ function toProject(r: ProjectRow): Project {
     targetWords: r.target_words,
     status: r.status,
     styleGuide: r.style_guide,
+    brainstorm: r.brainstorm ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -81,6 +83,7 @@ export interface ProjectInput {
   targetWords?: number;
   status?: ProjectStatus;
   styleGuide?: string;
+  brainstorm?: string;
 }
 
 export function createProject(input: ProjectInput): Project {
@@ -88,8 +91,8 @@ export function createProject(input: ProjectInput): Project {
   const id = newId();
   const ts = nowIso();
   db.prepare(
-    `INSERT INTO projects (id, title, logline, genre, target_words, status, style_guide, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO projects (id, title, logline, genre, target_words, status, style_guide, brainstorm, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     id,
     input.title,
@@ -98,6 +101,7 @@ export function createProject(input: ProjectInput): Project {
     input.targetWords ?? 0,
     input.status ?? 'drafting',
     input.styleGuide ?? '',
+    input.brainstorm ?? '',
     ts,
     ts,
   );
@@ -109,7 +113,7 @@ export function updateProject(id: ID, patch: Partial<ProjectInput>): Project | n
   if (!cur) return null;
   getDb()
     .prepare(
-      `UPDATE projects SET title=?, logline=?, genre=?, target_words=?, status=?, style_guide=?, updated_at=? WHERE id=?`,
+      `UPDATE projects SET title=?, logline=?, genre=?, target_words=?, status=?, style_guide=?, brainstorm=?, updated_at=? WHERE id=?`,
     )
     .run(
       patch.title ?? cur.title,
@@ -118,6 +122,7 @@ export function updateProject(id: ID, patch: Partial<ProjectInput>): Project | n
       patch.targetWords ?? cur.targetWords,
       patch.status ?? cur.status,
       patch.styleGuide ?? cur.styleGuide,
+      patch.brainstorm ?? cur.brainstorm ?? '',
       nowIso(),
       id,
     );

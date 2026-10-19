@@ -135,6 +135,53 @@ function migrate(d: DatabaseSync): void {
     version = 2;
   }
 
+  if (version < 3) {
+    // 分层创作（脑暴/细纲/场景卡）+ 作者知识库
+    d.exec(`
+      ALTER TABLE projects ADD COLUMN brainstorm TEXT NOT NULL DEFAULT '';
+      ALTER TABLE chapters ADD COLUMN beats TEXT NOT NULL DEFAULT '';
+
+      CREATE TABLE IF NOT EXISTS scenes (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        title TEXT NOT NULL,
+        pov TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        goal TEXT NOT NULL DEFAULT '',
+        conflict TEXT NOT NULL DEFAULT '',
+        outcome TEXT NOT NULL DEFAULT '',
+        key_lines TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_scenes_chapter ON scenes(chapter_id, sort_order);
+
+      CREATE TABLE IF NOT EXISTS knowledge_docs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT '',
+        tags TEXT NOT NULL DEFAULT '[]',
+        content TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_knowledge_project ON knowledge_docs(project_id);
+
+      CREATE TABLE IF NOT EXISTS knowledge_chunks (
+        id TEXT PRIMARY KEY,
+        doc_id TEXT NOT NULL REFERENCES knowledge_docs(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        chunk_index INTEGER NOT NULL,
+        text TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chunks_project ON knowledge_chunks(project_id);
+    `);
+    version = 3;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
 }
 

@@ -22,6 +22,7 @@ interface ChapterRow {
   status: ChapterStatus;
   word_count: number;
   summary: string;
+  beats: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -47,6 +48,7 @@ const toChapter = (r: ChapterRow): Chapter => ({
   status: r.status,
   wordCount: r.word_count,
   summary: r.summary,
+  beats: r.beats ?? '',
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -134,6 +136,7 @@ export interface ChapterInput {
   outline?: string;
   content?: string;
   status?: ChapterStatus;
+  beats?: string;
 }
 
 export function createChapter(projectId: ID, input: ChapterInput): Chapter {
@@ -145,8 +148,8 @@ export function createChapter(projectId: ID, input: ChapterInput): Chapter {
     .get(projectId) as { m: number };
   const content = input.content ?? '';
   db.prepare(
-    `INSERT INTO chapters (id, project_id, volume_id, title, sort_order, outline, content, status, word_count, summary, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO chapters (id, project_id, volume_id, title, sort_order, outline, content, status, word_count, summary, beats, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     id,
     projectId,
@@ -158,6 +161,7 @@ export function createChapter(projectId: ID, input: ChapterInput): Chapter {
     input.status ?? 'outline',
     countWords(content),
     '',
+    input.beats ?? '',
     ts,
     ts,
   );
@@ -170,7 +174,7 @@ export function updateChapter(id: ID, patch: Partial<ChapterInput>): Chapter | n
   const db = getDb();
   const content = patch.content ?? cur.content;
   db.prepare(
-    `UPDATE chapters SET volume_id=?, title=?, outline=?, content=?, status=?, word_count=?, updated_at=? WHERE id=?`,
+    `UPDATE chapters SET volume_id=?, title=?, outline=?, content=?, status=?, word_count=?, beats=?, updated_at=? WHERE id=?`,
   ).run(
     patch.volumeId === undefined ? cur.volumeId : patch.volumeId,
     patch.title ?? cur.title,
@@ -178,6 +182,7 @@ export function updateChapter(id: ID, patch: Partial<ChapterInput>): Chapter | n
     content,
     patch.status ?? cur.status,
     countWords(content),
+    patch.beats ?? cur.beats ?? '',
     nowIso(),
     id,
   );
