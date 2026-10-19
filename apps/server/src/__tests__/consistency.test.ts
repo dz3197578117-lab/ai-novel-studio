@@ -129,6 +129,18 @@ test('parseConsistencyReport 接受 history 类型', () => {
   assert.equal(r.issues[0]!.kind, 'history');
 });
 
+test('一致性检查要求查「叙述中自呼姓名」', () => {
+  const p = buildConsistencyPrompt({
+    project: { id: 'p', title: '测试', logline: '', genre: '', styleGuide: '', targetWords: 0, status: 'drafting', createdAt: '', updatedAt: '' } as Project,
+    entities: [],
+    chapters: [],
+    foreshadows: [],
+    timeline: [],
+  });
+  assert.match(p.system, /叙述者用自己的名字指代自己/);
+  assert.match(p.system, /台词/);
+});
+
 test('buildConsistencyPrompt 带上设定/伏笔/时间线与范围', () => {
   const project = {
     id: 'p1',

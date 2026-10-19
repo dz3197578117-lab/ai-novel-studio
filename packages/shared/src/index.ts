@@ -344,7 +344,7 @@ export type IssueKind =
   | 'plot'         // 情节逻辑
   | 'foreshadow'   // 伏笔问题
   | 'history'      // 史实 / 制度 / 常识错误
-  | 'pov'          // 人称 / 视角不一致
+  | 'pov'          // 人称 / 视角不一致（含叙述中自呼姓名）
   | 'other';
 
 export interface ConsistencyIssue {
