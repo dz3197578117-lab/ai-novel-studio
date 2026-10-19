@@ -70,6 +70,10 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const [tocInstruction, setTocInstruction] = useState('');
   const [tocPlan, setTocPlan] = useState<TocPlan | null>(null);
   const [tocBusy, setTocBusy] = useState(false);
+  /** 后台任务进度 */
+  const [tocJob, setTocJob] = useState<{ done: number; total: number; phase: string } | null>(
+    null,
+  );
 
   // 新增表单
   const [fsTitle, setFsTitle] = useState('');
@@ -184,16 +188,40 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   async function genToc() {
     setTocBusy(true);
     setTocPlan(null);
+    setTocJob(null);
     try {
-      const plan = await api.post<TocPlan>(`/api/projects/${project!.id}/generate-toc`, {
-        chapterCount: Number(tocCount) || 20,
-        instruction: tocInstruction.trim() || undefined,
-      });
-      setTocPlan(plan);
+      const started = await api.post<{ jobId: string; batches: number }>(
+        `/api/projects/${project!.id}/generate-toc`,
+        {
+          chapterCount: Number(tocCount) || 20,
+          instruction: tocInstruction.trim() || undefined,
+        },
+      );
+
+      // 后台任务：轮询进度，1000 章可能要跑几十分钟
+      type JobResp = {
+        status: 'running' | 'done' | 'error';
+        progress: { done: number; total: number; phase: string };
+        result?: TocPlan;
+        error?: string;
+      };
+      let job: JobResp | null = null;
+      for (let i = 0; i < 3600; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        job = await api.get<JobResp>(`/api/jobs/${started.jobId}`);
+        setTocJob(job.progress);
+        if (job.status === 'done') break;
+        if (job.status === 'error') throw new Error(job.error || '生成失败');
+      }
+      if (!job || job.status !== 'done' || !job.result) {
+        throw new Error('生成超时，请重试');
+      }
+      setTocPlan(job.result);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setTocBusy(false);
+      setTocJob(null);
     }
   }
 
@@ -384,7 +412,15 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
 
           {tocBusy && (
             <div className="empty" style={{ padding: '8px 0' }}>
-              正在规划目录，章数多时需要几分钟…
+              {tocJob
+                ? `正在规划目录：已完成 ${tocJob.done}/${tocJob.total} 批${
+                    tocJob.total > 0
+                      ? `（${Math.min(100, Math.round((tocJob.done / tocJob.total) * 100))}%）`
+                      : ''
+                  }${tocJob.phase === 'planning' ? ' · 正在定骨架' : ''}`
+                : '已提交后台任务，等待开始…'}
+              <br />
+              1000 章大约需要 30-60 分钟，可以先去忙别的，这个页面别关。
             </div>
           )}
 

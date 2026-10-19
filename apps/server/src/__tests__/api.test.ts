@@ -589,6 +589,11 @@ describe('AI 生成目录（已有作品）', () => {
     const res = await post(`/api/projects/${projectId}/apply-toc`, { chapters: [] });
     assert.equal(res.statusCode, 400);
   });
+
+  test('未知任务返回 404', async () => {
+    const res = await get('/api/jobs/does-not-exist');
+    assert.equal(res.statusCode, 404);
+  });
 });
 
 describe('分层创作与知识库', () => {

@@ -1,5 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import type { AiProviderConfig, DraftChapter, InterviewMessage, NovelDraft, Project } from '@novelforge/shared';
+import type {
+  AiProviderConfig,
+  DraftChapter,
+  DraftVolume,
+  InterviewMessage,
+  NovelDraft,
+  Project,
+} from '@novelforge/shared';
 import {
   CHAPTER_BATCH_SIZE,
   MAX_CHAPTERS,
@@ -17,6 +24,7 @@ import {
 } from '../ai/draft.js';
 import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js';
 import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/client.js';
+import { createJob, getJob, patchJob, runJob } from '../services/jobs.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import { createChapter, createVolume, listChapters } from '../repos/chapters.repo.js';
@@ -90,11 +98,13 @@ async function generateChunked(
   config: AiProviderConfig,
   req: { idea: string; genre?: string; chapterCount: number },
   chapterCount: number,
+  onProgress?: (done: number, total: number, phase: string) => void,
 ): Promise<NovelDraft> {
   const budget = draftBudget(config);
 
   // 1. 骨架
   const skPrompt = buildSkeletonPrompt({ ...req, chapterCount });
+  onProgress?.(0, Math.ceil(chapterCount / CHAPTER_BATCH_SIZE), 'planning');
   const skContent = await completeAccumulated(
     config,
     [
@@ -165,6 +175,7 @@ async function generateChunked(
     if (start + CHAPTER_BATCH_SIZE < chapterCount) {
       await sleep(BATCH_DELAY_MS);
     }
+    onProgress?.(batch, batchTotal, 'chapters');
   }
 
   return { ...skeleton, chapters };
@@ -362,20 +373,38 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       chapterCount,
     };
 
-    try {
+    // 章数多时要跑几十分钟，单请求扛不住：改成后台任务 + 轮询
+    const batchTotal = Math.max(1, Math.ceil(chapterCount / CHAPTER_BATCH_SIZE));
+    const job = createJob<{ volumes: DraftVolume[]; chapters: DraftChapter[] }>('toc', {
+      phase: 'planning',
+      done: 0,
+      total: batchTotal,
+      note: `计划生成 ${chapterCount} 章`,
+    });
+
+    runJob(job, async () => {
       const draft =
         chapterCount <= SINGLE_CALL_MAX_CHAPTERS
           ? await generateSingle(config, request, chapterCount)
-          : await generateChunked(config, request, chapterCount);
+          : await generateChunked(config, request, chapterCount, (done, total, phase) =>
+              patchJob(job.id, { progress: { done, total, phase } }),
+            );
       return { volumes: draft.volumes, chapters: draft.chapters };
-    } catch (e) {
-      if (e instanceof AiError) {
-        return reply.code(502).send({ error: 'toc_failed', message: e.message });
-      }
-      return reply
-        .code(502)
-        .send({ error: 'toc_failed', message: `生成目录失败：${(e as Error).message}` });
-    }
+    });
+
+    return reply.code(202).send({
+      jobId: job.id,
+      chapterCount,
+      batches: batchTotal,
+      message: `已在后台生成，共 ${batchTotal} 批；可查看进度`,
+    });
+  });
+
+  /** 查询后台任务进度 / 结果 */
+  app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {
+    const job = getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'not_found', message: '任务不存在或已过期' });
+    return job;
   });
 
   /** 把预览确认后的目录写入现有作品（追加，不删除已有章节） */
