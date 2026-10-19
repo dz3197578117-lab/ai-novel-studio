@@ -169,6 +169,51 @@ export interface ChatMessage {
   content: string;
 }
 
+// ─────────────────────────── AI 生成整本小说 ───────────────────────────
+
+/** 用户对想要的小说提出的需求 */
+export interface DraftRequest {
+  /** 自由描述：想写什么故事 */
+  idea: string;
+  /** 题材倾向，留空由 AI 决定 */
+  genre?: string;
+  /** 目标章数，默认 10 */
+  chapterCount?: number;
+}
+
+export interface DraftEntity {
+  type: EntityType;
+  name: string;
+  aliases?: string[];
+  summary: string;
+  fields?: EntityField[];
+  body?: string;
+  pinned?: boolean;
+}
+
+export interface DraftVolume {
+  title: string;
+  summary: string;
+}
+
+export interface DraftChapter {
+  /** 属于第几卷（对应 volumes 数组下标） */
+  volumeIndex: number;
+  title: string;
+  outline: string;
+}
+
+/** AI 产出的小说方案（尚未落库，供用户预览/确认） */
+export interface NovelDraft {
+  title: string;
+  logline: string;
+  genre: string;
+  styleGuide: string;
+  entities: DraftEntity[];
+  volumes: DraftVolume[];
+  chapters: DraftChapter[];
+}
+
 /** 流式事件：SSE 传输，每行 `data: <json>\n\n` */
 export type StreamEvent =
   | { type: 'delta'; text: string }

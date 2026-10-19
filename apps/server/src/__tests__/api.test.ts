@@ -312,6 +312,99 @@ describe('导出', () => {
   });
 });
 
+describe('AI 生成小说', () => {
+  const draft = {
+    title: '雪落长夜',
+    logline: '少年剑修追查父亲冤案。',
+    genre: '古典玄幻',
+    styleGuide: '冷峻克制',
+    entities: [
+      { type: 'character', name: '沈砚', summary: '主角', pinned: true },
+      { type: 'faction', name: '青云宗', summary: '剑宗', pinned: false },
+    ],
+    volumes: [
+      { title: '第一卷', summary: '开端' },
+      { title: '第二卷', summary: '发展' },
+    ],
+    chapters: [
+      { volumeIndex: 0, title: '第一章', outline: '开局' },
+      { volumeIndex: 1, title: '第二章', outline: '转折' },
+    ],
+  };
+
+  test('未配置模型时生成方案返回 412', async () => {
+    await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { text: { baseUrl: '', apiKey: '', model: '' } },
+    });
+    const res = await post('/api/ai/draft', { idea: '写一个剑修复仇的故事' });
+    assert.equal(res.statusCode, 412);
+  });
+
+  test('需求太短返回 400', async () => {
+    const res = await post('/api/ai/draft', { idea: '剑' });
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('按方案创建作品，卷章映射正确', async () => {
+    const res = await post('/api/projects/from-draft', { draft });
+    assert.equal(res.statusCode, 201);
+    const body = JSON.parse(res.body) as {
+      project: { id: string; title: string };
+      counts: { entities: number; volumes: number; chapters: number };
+    };
+    assert.equal(body.project.title, '雪落长夜');
+    assert.equal(body.counts.entities, 2);
+    assert.equal(body.counts.volumes, 2);
+    assert.equal(body.counts.chapters, 2);
+
+    const volumes = JSON.parse((await get(`/api/projects/${body.project.id}/volumes`)).body) as {
+      id: string;
+      title: string;
+    }[];
+    const chapters = JSON.parse(
+      (await get(`/api/projects/${body.project.id}/chapters`)).body,
+    ) as { title: string; volumeId: string | null }[];
+    assert.equal(chapters.length, 2);
+    // 第一章应挂在第一卷下，第二章挂在第二卷下
+    assert.equal(chapters[0]!.volumeId, volumes[0]!.id);
+    assert.equal(chapters[1]!.volumeId, volumes[1]!.id);
+
+    const entities = JSON.parse(
+      (await get(`/api/projects/${body.project.id}/entities`)).body,
+    ) as { name: string; pinned: boolean }[];
+    assert.equal(entities.length, 2);
+    assert.equal(entities.find((e) => e.name === '沈砚')!.pinned, true);
+  });
+
+  test('创建的作品出现在书架概览里', async () => {
+    const created = JSON.parse((await post('/api/projects/from-draft', { draft })).body);
+    const list = JSON.parse((await get('/api/projects/overview')).body) as {
+      id: string;
+      chapterCount: number;
+      entityCount: number;
+    }[];
+    const item = list.find((p) => p.id === created.project.id)!;
+    assert.equal(item.chapterCount, 2);
+    assert.equal(item.entityCount, 2);
+  });
+
+  test('方案缺少章节时拒绝创建', async () => {
+    const res = await post('/api/projects/from-draft', {
+      draft: { ...draft, chapters: [] },
+    });
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('方案缺少书名时拒绝创建', async () => {
+    const res = await post('/api/projects/from-draft', {
+      draft: { ...draft, title: '' },
+    });
+    assert.equal(res.statusCode, 400);
+  });
+});
+
 describe('设置', () => {
   test('读取时对 API Key 打码', async () => {
     await app.inject({

@@ -4,6 +4,7 @@ import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import { ProjectDialog } from './ProjectDialog';
 import { SettingsDialog } from './SettingsDialog';
+import { AiNovelDialog } from './AiNovelDialog';
 
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   drafting: '写作中',
@@ -29,6 +30,7 @@ export function ShelfPage({ onOpenWorkspace }: { onOpenWorkspace: () => void }) 
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<{ project: ProjectOverview | null } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -112,9 +114,10 @@ export function ShelfPage({ onOpenWorkspace }: { onOpenWorkspace: () => void }) 
             onChange={(e) => setQuery(e.target.value)}
             placeholder="搜索书名、题材或简介…"
           />
-          <button className="primary" onClick={() => setEditor({ project: null })}>
-            ＋ 新建作品
+          <button className="primary" onClick={() => setAiOpen(true)} title="描述需求，让 AI 直接生成一部小说">
+            ✨ AI 生成小说
           </button>
+          <button onClick={() => setEditor({ project: null })}>＋ 手动新建</button>
         </div>
 
         {items.length > 0 && (
@@ -209,6 +212,14 @@ export function ShelfPage({ onOpenWorkspace }: { onOpenWorkspace: () => void }) 
         onSaved={refresh}
       />
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <AiNovelDialog
+        open={aiOpen}
+        onClose={() => setAiOpen(false)}
+        onCreated={async (projectId) => {
+          await selectProject(projectId);
+          onOpenWorkspace();
+        }}
+      />
     </div>
   );
 }

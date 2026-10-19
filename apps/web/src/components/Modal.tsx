@@ -5,11 +5,14 @@ export function Modal({
   onClose,
   title,
   children,
+  wide,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  /** 内容较多时用更宽的弹窗（如小说方案预览） */
+  wide?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -23,7 +26,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true">
+      <div className={`modal${wide ? ' modal-wide' : ''}`} role="dialog" aria-modal="true">
         <h2>{title}</h2>
         {children}
       </div>

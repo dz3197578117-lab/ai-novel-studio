@@ -24,6 +24,24 @@
 
 ## 常见任务
 
+### 调整「AI 生成小说」的产出
+
+流程分两步，改之前先弄清边界：
+
+1. **生成方案**（`POST /api/ai/draft`）
+   - 提示词在 `server/src/ai/draft.ts` 的 `buildDraftPrompt()`
+   - 模型输出由 `parseDraft()` 清洗：去代码块、截取 JSON、类型兜底、越界卷号归零、超量截断
+   - **不落库**，只返回给前端预览
+2. **创建作品**（`POST /api/projects/from-draft`）
+   - 校验用 `schemas.ts` 的 `novelDraftSchema`
+   - 依次创建项目 → 设定 → 卷 → 章节，`volumeIndex` 映射到真实卷 id
+
+想改产出结构（比如加「金句」「章节钩子」字段）时，三处要同步：
+`shared` 的 `NovelDraft` / `draft.ts` 的提示词与 normalize / `schemas.ts` 的校验。
+
+> 模型返回 JSON 是不可靠的：可能包 ```json、加解释、字段类型写错、卷号越界。
+> 所有兜底都在 `parseDraft()` 里，新增字段时务必也在那里补 normalze，不要直接信任模型输出。
+
 ### 加一个设定类型（比如「功法」）
 
 1. `shared/src/index.ts`：`EntityType` 加 `'technique'`
