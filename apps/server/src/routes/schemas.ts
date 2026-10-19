@@ -81,7 +81,8 @@ export const imageRequest = z.object({
 export const draftRequestSchema = z.object({
   idea: z.string().min(4, '请至少写几个字描述你想要的小说').max(2000),
   genre: z.string().max(60).optional(),
-  chapterCount: z.number().int().min(3).max(30).optional(),
+  /** 章数由用户自由填写，限制在可生成的范围内 */
+  chapterCount: z.number().int().min(1).max(100).optional(),
 });
 
 /**
@@ -120,5 +121,5 @@ export const novelDraftSchema = z.object({
       }),
     )
     .min(1, '至少需要一章')
-    .max(60),
+    .max(100, '章节数量超出限制'),
 });

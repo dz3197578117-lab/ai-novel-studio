@@ -6,6 +6,15 @@ import { Modal } from './Modal';
 
 const CHAPTER_OPTIONS = [6, 10, 15, 20, 30];
 
+/** 章数允许范围，与后端一致 */
+const MIN_CHAPTERS = 1;
+const MAX_CHAPTERS = 100;
+
+function clampCount(n: number): number {
+  if (!Number.isFinite(n)) return 10;
+  return Math.max(MIN_CHAPTERS, Math.min(MAX_CHAPTERS, Math.floor(n)));
+}
+
 const TYPE_LABEL: Record<string, string> = {
   world: '世界观',
   character: '人物',
@@ -33,10 +42,15 @@ export function AiNovelDialog({
 
   const [idea, setIdea] = useState('');
   const [genre, setGenre] = useState('');
-  const [chapterCount, setChapterCount] = useState(10);
+  /** 用字符串保存，允许用户自由输入；提交时再归一化 */
+  const [chapterInput, setChapterInput] = useState('10');
   const [draft, setDraft] = useState<NovelDraft | null>(null);
   const [generating, setGenerating] = useState(false);
   const [creating, setCreating] = useState(false);
+  /** 本次生成时要求的章数，用于提示 AI 给的章数是否对得上 */
+  const [requestedCount, setRequestedCount] = useState<number | null>(null);
+
+  const chapterCount = clampCount(Number(chapterInput));
 
   function reset() {
     setDraft(null);
@@ -46,6 +60,7 @@ export function AiNovelDialog({
     if (!idea.trim()) return;
     setGenerating(true);
     setDraft(null);
+    setRequestedCount(chapterCount);
     try {
       const res = await api.post<{ draft: NovelDraft }>('/api/ai/draft', {
         idea: idea.trim(),
@@ -107,14 +122,31 @@ export function AiNovelDialog({
               />
             </div>
             <div className="field" style={{ flex: 1 }}>
-              <label>规划章数</label>
-              <select value={chapterCount} onChange={(e) => setChapterCount(Number(e.target.value))}>
+              <label>规划章数（可自己填）</label>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={chapterInput}
+                onChange={(e) => setChapterInput(e.target.value)}
+                onBlur={() => {
+                  // 失焦时纠正到合法范围，避免空值/负数/超量
+                  const n = clampCount(Number(chapterInput));
+                  setChapterInput(String(n));
+                }}
+              />
+              <div className="count-presets">
                 {CHAPTER_OPTIONS.map((n) => (
-                  <option key={n} value={n}>
-                    {n} 章
-                  </option>
+                  <button
+                    key={n}
+                    type="button"
+                    className="count-chip"
+                    onClick={() => setChapterInput(String(n))}
+                  >
+                    {n}
+                  </button>
                 ))}
-              </select>
+              </div>
             </div>
           </div>
 
@@ -140,6 +172,11 @@ export function AiNovelDialog({
               <div className="draft-title">{draft.title}</div>
               <div className="draft-sub">
                 {draft.genre || '未分类'} · {draft.volumes.length} 卷 · {draft.chapters.length} 章
+                {requestedCount && draft.chapters.length !== requestedCount && (
+                  <span className="draft-warn">
+                    （你要求 {requestedCount} 章，AI 给了 {draft.chapters.length} 章）
+                  </span>
+                )}
               </div>
             </div>
           </div>

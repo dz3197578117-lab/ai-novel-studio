@@ -533,6 +533,34 @@ textarea {
   color: var(--muted);
   margin-top: 4px;
 }
+.draft-warn {
+  color: var(--accent);
+  margin-left: 6px;
+}
+/* 章数快捷预设，紧跟在数字输入框下方 */
+.count-presets {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.count-chip {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 20px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.count-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* 隐藏数字输入框的上下箭头，保持界面干净（仍可手动输入） */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 .draft-logline {
   font-size: 13px;
   line-height: 1.8;

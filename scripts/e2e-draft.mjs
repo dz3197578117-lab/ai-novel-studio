@@ -166,6 +166,29 @@ async function main() {
       })()`);
       await sleep(300);
 
+      // 章数可自由填写 + 快捷预设
+      const presetClicked = await evaluate(`(() => {
+        const chip = Array.from(document.querySelectorAll('.count-chip')).find(x => x.textContent.trim() === '15');
+        if (!chip) return false;
+        chip.click();
+        return true;
+      })()`);
+      await sleep(300); // 等 React 重新渲染后再读输入框
+      const presetValue = await evaluate(
+        'document.querySelector(".modal input[type=\\"number\\"]").value',
+      );
+      check('快捷预设可一键填入', presetClicked && presetValue === '15', `value=${presetValue}`);
+
+      const customValue = await evaluate(`(() => {
+        const input = document.querySelector('.modal input[type="number"]');
+        if (!input) return null;
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(input, '8');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        return input.value;
+      })()`);
+      check('章数可自己填写', customValue === '8', `value=${customValue}`);
+
       const clickedGenerate = await evaluate(`(() => {
         const b = Array.from(document.querySelectorAll('.modal button')).find(x => x.textContent.includes('生成方案'));
         if (b && !b.disabled) { b.click(); return true; }
@@ -190,6 +213,10 @@ async function main() {
       check('预览按卷分组', volumesRendered >= 1, `${volumesRendered} 卷`);
       const logline = await evaluate('document.querySelector(".draft-logline")?.textContent ?? ""');
       check('预览显示简介', logline.length > 5, logline.slice(0, 40));
+
+      // 章数与要求不符时应有提示（mock 固定返回 6 章，这里要求的是 8 章）
+      const warn = await evaluate('document.querySelector(".draft-warn")?.textContent ?? ""');
+      check('章数不符时给出提示', warn.includes('8'), warn.trim());
 
       // 4. 创建作品
       const clickedCreate = await evaluate(`(() => {

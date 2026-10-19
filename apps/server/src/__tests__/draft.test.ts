@@ -74,14 +74,14 @@ test('parseDraft 没有书名时报错', () => {
 test('parseDraft 会把超量数据截断', () => {
   const many = {
     ...VALID,
-    chapters: Array.from({ length: 100 }, (_, i) => ({
+    chapters: Array.from({ length: 200 }, (_, i) => ({
       volumeIndex: 0,
       title: `第${i}章`,
       outline: 'x',
     })),
   };
   const d = parseDraft(JSON.stringify(many));
-  assert.ok(d.chapters.length <= 40);
+  assert.ok(d.chapters.length <= 100, `实际 ${d.chapters.length}`);
 });
 
 test('buildDraftPrompt 带上需求、题材与章数', () => {
@@ -94,5 +94,17 @@ test('buildDraftPrompt 带上需求、题材与章数', () => {
 
 test('buildDraftPrompt 章数会被限制在合理范围', () => {
   const p = buildDraftPrompt({ idea: 'x', chapterCount: 999 });
-  assert.match(p.user, /30 章/);
+  assert.match(p.user, /100 章/);
+});
+
+test('buildDraftPrompt 支持自定义章数', () => {
+  const p = buildDraftPrompt({ idea: 'x', chapterCount: 37 });
+  assert.match(p.user, /37 章/);
+  // 37 章按每卷 10 章算应规划 4 卷
+  assert.match(p.system, /volumes 为 4 卷/);
+});
+
+test('buildDraftPrompt 章数最小为 1', () => {
+  const p = buildDraftPrompt({ idea: 'x', chapterCount: 0 });
+  assert.match(p.user, /1 章/);
 });

@@ -10,9 +10,15 @@ import { AiError } from './client.js';
 
 const VALID_TYPES: EntityType[] = ['world', 'character', 'faction', 'term', 'item', 'location'];
 
+/** 可自由设定，但要限制在单次生成能承受的范围内 */
+const MIN_CHAPTERS = 1;
+const MAX_CHAPTERS = 100;
+
 /** 构造「帮我策划一部小说」的提示词 */
 export function buildDraftPrompt(req: DraftRequest): { system: string; user: string } {
-  const chapterCount = clamp(req.chapterCount ?? 10, 3, 30);
+  const chapterCount = clamp(req.chapterCount ?? 10, MIN_CHAPTERS, MAX_CHAPTERS);
+  // 每卷约 10 章，至少 1 卷、最多 6 卷
+  const volumeCount = clamp(Math.ceil(chapterCount / 10), 1, 6);
   const system = `你是资深网络小说策划，擅长把一句话点子扩成可执行的创作方案。
 
 只输出一个 JSON 对象，不要解释，不要 markdown 代码块，不要多余文字。
@@ -40,7 +46,7 @@ JSON 结构：
 
 硬性要求：
 1. entities 至少 5 条，必须包含：主角、重要配角、对立势力、世界观条目；主角的 pinned 为 true，其余可为 false。
-2. volumes 为 2-3 卷；每一卷都要有 chapters。
+2. volumes 为 ${volumeCount} 卷（按每卷约 10 章来分），每一卷都要有 chapters。
 3. chapters 总数严格等于 ${chapterCount} 章，volumeIndex 从 0 开始，且不得超出 volumes 长度。
 4. 所有人物姓名、地名、势力名保持一致，不要自相矛盾。
 5. 内容必须贴合用户需求，不要写成通用套路。`;
@@ -89,7 +95,7 @@ function normalizeDraft(json: unknown): NovelDraft {
   if (!title) throw new AiError('模型没有给出书名，请重试。');
 
   const volumes: DraftVolume[] = arr(o.volumes)
-    .slice(0, 4)
+    .slice(0, 8)
     .map((v) => ({
       title: str((v as Record<string, unknown>)?.title).slice(0, 100) || '未命名卷',
       summary: str((v as Record<string, unknown>)?.summary).slice(0, 2000),
@@ -97,7 +103,8 @@ function normalizeDraft(json: unknown): NovelDraft {
   if (volumes.length === 0) volumes.push({ title: '第一卷', summary: '' });
 
   const chapters: DraftChapter[] = arr(o.chapters)
-    .slice(0, 40)
+    // 与 MAX_CHAPTERS 对齐，避免用户要求 100 章却被截断
+    .slice(0, MAX_CHAPTERS)
     .map((c) => {
       const rec = c as Record<string, unknown>;
       const idx = Number(rec?.volumeIndex);
