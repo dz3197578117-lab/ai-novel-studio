@@ -135,6 +135,24 @@ SQLite WAL 文件释放有延迟，测试清理要重试。见 `api.test.ts` 的
 
 验证脚本：`node scripts/diagnose-scroll.mjs`（派发真实滚轮事件，检查 scrollTop 是否变化）。
 
+**6. push 时报 `Failed to connect to github.com:443`**
+
+这台机器的 DNS 有时把 `github.com` 解析到 `20.205.243.166`，该地址 443 不通，
+而 GitHub 其它入口 IP 是通的（`api.github.com` 也正常，所以容易误以为是网络全断）。
+
+用内置脚本自动挑一个可用 IP 再推送：
+
+```bash
+pnpm push
+```
+
+它先直连试一次，失败则探测候选 IP，用 `git -c http.curloptResolve=...` 完成推送。
+手动方式同理：
+
+```bash
+git -c http.curloptResolve=github.com:443:140.82.112.3 push
+```
+
 ## 数据库迁移
 
 改表结构时：
