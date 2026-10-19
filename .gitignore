@@ -12,3 +12,11 @@ apps/web/dist/
 # 鏈湴鐜鍙橀噺
 .env
 .env.local
+
+# 与项目无关的历史文件
+.old-files/
+
+# 本地临时文件
+repo-url.txt
+*.log
+
