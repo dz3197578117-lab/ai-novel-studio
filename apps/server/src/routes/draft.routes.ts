@@ -15,11 +15,15 @@ import {
   buildChapterRegenPrompt,
   buildDraftPrompt,
   buildSkeletonPrompt,
+  buildTitleBatchPrompt,
   buildVolumeChaptersPrompt,
+  buildOutlineFillPrompt,
   parseChapterBatch,
   parseDraft,
+  parseOutlineFill,
   parseRegeneratedChapter,
   parseSkeleton,
+  parseTitleBatch,
   parseVolumeChapters,
   renumberChapterTitle,
   volumeCountFor,
@@ -29,7 +33,14 @@ import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/cl
 import { createJob, getJob, patchJob, runJob } from '../services/jobs.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
-import { createChapter, createVolume, listChapters, listVolumes } from '../repos/chapters.repo.js';
+import {
+  createChapter,
+  createVolume,
+  getChapter,
+  listChapters,
+  listVolumes,
+  updateChapter,
+} from '../repos/chapters.repo.js';
 import {
   draftRequestSchema,
   interviewRequest,
@@ -39,6 +50,7 @@ import {
   tocRequest,
   expandVolumeRequest,
   applyVolumeChapters,
+  fillOutlinesRequest,
 } from './schemas.js';
 
 /** 单次调用的超时时间（含重试等待） */
@@ -103,12 +115,17 @@ async function generateChunked(
   req: { idea: string; genre?: string; chapterCount: number },
   chapterCount: number,
   onProgress?: (done: number, total: number, phase: string) => void,
+  opts: { titlesOnly?: boolean } = {},
 ): Promise<NovelDraft> {
   const budget = draftBudget(config);
+  const titlesOnly = Boolean(opts.titlesOnly);
+  // 只要标题时输出短得多，一批可以写更多章
+  const batchSize = titlesOnly ? 50 : CHAPTER_BATCH_SIZE;
+  const batchTotal = Math.ceil(chapterCount / batchSize);
 
   // 1. 骨架
   const skPrompt = buildSkeletonPrompt({ ...req, chapterCount });
-  onProgress?.(0, Math.ceil(chapterCount / CHAPTER_BATCH_SIZE), 'planning');
+  onProgress?.(0, batchTotal, 'planning');
   const skContent = await completeAccumulated(
     config,
     [
@@ -130,24 +147,35 @@ async function generateChunked(
 
   // 2. 分批写章节
   const chapters: DraftChapter[] = [];
-  const batchTotal = Math.ceil(chapterCount / CHAPTER_BATCH_SIZE);
 
-  for (let start = 0, batch = 1; start < chapterCount; start += CHAPTER_BATCH_SIZE, batch++) {
-    const count = Math.min(CHAPTER_BATCH_SIZE, chapterCount - start);
+  for (let start = 0, batch = 1; start < chapterCount; start += batchSize, batch++) {
+    const count = Math.min(batchSize, chapterCount - start);
     const volumeIndexFor = Array.from({ length: count }, (_, i) =>
       volumeIndexForChapter(start + i, chapterCount, skeleton.volumes.length),
     );
-    const prompt = buildChapterBatchPrompt({
-      idea: req.idea,
-      title: skeleton.title,
-      logline: skeleton.logline,
-      volumes: skeleton.volumes,
-      volumeIndexFor,
-      startNumber: start + 1,
-      batchNumber: batch,
-      batchTotal,
-      previousTitles: chapters.map((c) => c.title),
-    });
+    const prompt = titlesOnly
+      ? buildTitleBatchPrompt({
+          projectTitle: skeleton.title,
+          logline: skeleton.logline,
+          genre: req.genre ?? '',
+          idea: req.idea,
+          volumeTitles: skeleton.volumes.map((v) => v.title),
+          volumeIndexFor,
+          startNumber: start + 1,
+          count,
+          previousTitles: chapters.map((c) => c.title),
+        })
+      : buildChapterBatchPrompt({
+          idea: req.idea,
+          title: skeleton.title,
+          logline: skeleton.logline,
+          volumes: skeleton.volumes,
+          volumeIndexFor,
+          startNumber: start + 1,
+          batchNumber: batch,
+          batchTotal,
+          previousTitles: chapters.map((c) => c.title),
+        });
 
     const batchContent = await completeAccumulated(
       config,
@@ -160,7 +188,9 @@ async function generateChunked(
 
     let got: DraftChapter[];
     try {
-      got = parseChapterBatch(batchContent, skeleton.volumes.length);
+      got = titlesOnly
+        ? parseTitleBatch(batchContent, skeleton.volumes.length)
+        : parseChapterBatch(batchContent, skeleton.volumes.length);
     } catch (e) {
       throw new AiError(
         `第 ${batch}/${batchTotal} 批章节生成失败（${(e as Error).message}）。` +
@@ -176,7 +206,7 @@ async function generateChunked(
     );
 
     // 批次之间稍等一下，别把服务商的每分钟额度打满
-    if (start + CHAPTER_BATCH_SIZE < chapterCount) {
+    if (start + batchSize < chapterCount) {
       await sleep(BATCH_DELAY_MS);
     }
     onProgress?.(batch, batchTotal, 'chapters');
@@ -378,20 +408,26 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     };
 
     // 章数多时要跑几十分钟，单请求扛不住：改成后台任务 + 轮询
-    const batchTotal = Math.max(1, Math.ceil(chapterCount / CHAPTER_BATCH_SIZE));
+    const titlesOnly = Boolean(parsed.data.titlesOnly);
+    const perBatch = titlesOnly ? 50 : CHAPTER_BATCH_SIZE;
+    const batchTotal = Math.max(1, Math.ceil(chapterCount / perBatch));
     const job = createJob<{ volumes: DraftVolume[]; chapters: DraftChapter[] }>('toc', {
       phase: 'planning',
       done: 0,
       total: batchTotal,
-      note: `计划生成 ${chapterCount} 章`,
+      note: titlesOnly ? `只生成 ${chapterCount} 个章节名` : `计划生成 ${chapterCount} 章`,
     });
 
     runJob(job, async () => {
       const draft =
-        chapterCount <= SINGLE_CALL_MAX_CHAPTERS
+        !titlesOnly && chapterCount <= SINGLE_CALL_MAX_CHAPTERS
           ? await generateSingle(config, request, chapterCount)
-          : await generateChunked(config, request, chapterCount, (done, total, phase) =>
-              patchJob(job.id, { progress: { done, total, phase } }),
+          : await generateChunked(
+              config,
+              request,
+              chapterCount,
+              (done, total, phase) => patchJob(job.id, { progress: { done, total, phase } }),
+              { titlesOnly },
             );
       return { volumes: draft.volumes, chapters: draft.chapters };
     });
@@ -400,7 +436,10 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       jobId: job.id,
       chapterCount,
       batches: batchTotal,
-      message: `已在后台生成，共 ${batchTotal} 批；可查看进度`,
+      titlesOnly,
+      message: titlesOnly
+        ? `已在后台生成 ${chapterCount} 个章节名（不含大纲），共 ${batchTotal} 批`
+        : `已在后台生成，共 ${batchTotal} 批；可查看进度`,
     });
   });
 
@@ -562,6 +601,194 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       });
     },
   );
+
+  /**
+   * 批量补全章节大纲：目录先只出名字，之后用这个把大纲补上。
+   * 后台任务 + 进度，每批 10 章。
+   */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/fill-outlines', async (req, reply) => {
+    const project = getProject(req.params.id);
+    if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+    const parsed = fillOutlinesRequest.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '参数校验失败',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    const all = listChapters(project.id)
+      .map((c) => getChapter(c.id))
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+
+    const wantIds = parsed.data.ids?.length ? new Set(parsed.data.ids) : null;
+    const onlyMissing = parsed.data.onlyMissing !== false;
+    const targets = all.filter((c) => {
+      if (wantIds) return wantIds.has(c.id);
+      return onlyMissing ? !c.outline.trim() : true;
+    });
+
+    if (targets.length === 0) {
+      return reply.code(400).send({
+        error: 'nothing_to_do',
+        message: '没有需要补大纲的章节（都已有大纲了）',
+      });
+    }
+
+    const batchSize = 10;
+    const batchTotal = Math.ceil(targets.length / batchSize);
+    const job = createJob('outlines', {
+      phase: 'chapters',
+      done: 0,
+      total: batchTotal,
+      note: `补 ${targets.length} 章大纲`,
+    });
+
+    const idea = [
+      `书名：${project.title}`,
+      project.logline ? `简介：${project.logline}` : '',
+      project.genre ? `题材：${project.genre}` : '',
+      project.brainstorm ? `作者想法：${project.brainstorm.slice(0, 1200)}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    runJob(job, async () => {
+      let done = 0;
+      const failed: string[] = [];
+      for (let i = 0; i < targets.length; i += batchSize) {
+        const batch = targets.slice(i, i + batchSize);
+        const prompt = buildOutlineFillPrompt({
+          projectTitle: project.title,
+          logline: project.logline,
+          genre: project.genre,
+          styleGuide: project.styleGuide,
+          idea,
+          chapters: batch.map((c) => ({
+            number: all.findIndex((x) => x.id === c.id) + 1,
+            title: c.title,
+          })),
+          contextAround: all
+            .slice(Math.max(0, i - 2), Math.min(all.length, i + batchSize + 2))
+            .filter((x) => x.outline.trim())
+            .map((x) => `${x.title}：${x.outline.slice(0, 80)}`)
+            .join('\n'),
+        });
+
+        const content = await completeAccumulated(
+          config,
+          [
+            { role: 'system', content: prompt.system },
+            { role: 'user', content: prompt.user },
+          ],
+          { maxTokens: Math.max(config.maxTokens || 0, 4096), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
+        );
+
+        const outlines = parseOutlineFill(content);
+        batch.forEach((c, idx) => {
+          const outline = outlines[idx];
+          if (outline) updateChapter(c.id, { outline });
+          else failed.push(c.title);
+        });
+
+        done += 1;
+        patchJob(job.id, {
+          progress: {
+            done,
+            total: batchTotal,
+            phase: 'chapters',
+            note: failed.length ? `${failed.length} 章未成功` : undefined,
+          },
+        });
+        if (i + batchSize < targets.length) await sleep(BATCH_DELAY_MS);
+      }
+      return { filled: targets.length - failed.length, failed };
+    });
+
+    return reply.code(202).send({
+      jobId: job.id,
+      chapterCount: targets.length,
+      batches: batchTotal,
+    });
+  });
+
+  /** 单章补大纲（编辑器里点一下，几秒出结果） */
+  app.post<{ Params: { id: string } }>('/api/chapters/:id/fill-outline', async (req, reply) => {
+    const chapter = getChapter(req.params.id);
+    if (!chapter) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
+    const project = getProject(chapter.projectId);
+    if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    const all = listChapters(project.id)
+      .map((c) => getChapter(c.id))
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+    const idx = all.findIndex((c) => c.id === chapter.id);
+
+    const prompt = buildOutlineFillPrompt({
+      projectTitle: project.title,
+      logline: project.logline,
+      genre: project.genre,
+      styleGuide: project.styleGuide,
+      idea: [
+        project.logline,
+        project.genre,
+        project.brainstorm?.slice(0, 1200) ?? '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      chapters: [{ number: idx + 1, title: chapter.title }],
+      contextAround: all
+        .slice(Math.max(0, idx - 3), idx + 4)
+        .filter((c) => c.id !== chapter.id && c.outline.trim())
+        .map((c) => `${c.title}：${c.outline.slice(0, 80)}`)
+        .join('\n'),
+    });
+
+    try {
+      const content = await completeAccumulated(
+        config,
+        [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        { maxTokens: Math.max(config.maxTokens || 0, 4096), signal: AbortSignal.timeout(120_000) },
+      );
+      const [outline] = parseOutlineFill(content);
+      if (!outline) {
+        return reply.code(502).send({ error: 'empty', message: '模型没有给出大纲，请重试' });
+      }
+      return updateChapter(chapter.id, { outline });
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(502).send({ error: 'outline_failed', message: e.message });
+      }
+      return reply
+        .code(502)
+        .send({ error: 'outline_failed', message: `生成大纲失败：${(e as Error).message}` });
+    }
+  });
 
   /** 查询后台任务进度 / 结果 */
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {

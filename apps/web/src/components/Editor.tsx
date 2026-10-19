@@ -210,6 +210,21 @@ export function Editor() {
     }
   }
 
+  /** 单章补大纲（目录只出了名字时用） */
+  async function genOutline() {
+    if (!chapter) return;
+    setLayerBusy(true);
+    try {
+      const updated = await api.post<Chapter>(`/api/chapters/${chapter.id}/fill-outline`);
+      setOutline(updated.outline);
+      markEdit({ outline: updated.outline });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLayerBusy(false);
+    }
+  }
+
   /** 大纲 → 细纲 */
   async function genBeats() {
     if (!chapter) return;
@@ -280,7 +295,17 @@ export function Editor() {
       <div className="editor-body">
         <div className="editor-inner">
           <div className="field" style={{ marginBottom: 0 }}>
-            <label>本章大纲（AI 写作依据，也用于长期记忆）</label>
+            <label style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>本章大纲（AI 写作依据，也用于长期记忆）</span>
+              <button
+                className="count-chip"
+                onClick={() => void genOutline()}
+                disabled={layerBusy}
+                title="让 AI 为本章补写大纲"
+              >
+                {layerBusy ? '生成中…' : 'AI 写大纲'}
+              </button>
+            </label>
             <textarea
               rows={2}
               value={outline}

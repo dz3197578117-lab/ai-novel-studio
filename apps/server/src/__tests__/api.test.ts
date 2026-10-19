@@ -594,6 +594,29 @@ describe('AI 生成目录（已有作品）', () => {
     const res = await get('/api/jobs/does-not-exist');
     assert.equal(res.statusCode, 404);
   });
+
+  test('未配置模型时补全大纲返回 412', async () => {
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '补大纲无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+
+    const chapters = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      id: string;
+    }[];
+    const r1 = await post(`/api/projects/${projectId}/fill-outlines`, { onlyMissing: true });
+    assert.equal(r1.statusCode, 412);
+
+    const r2 = await post(`/api/chapters/${chapters[0]!.id}/fill-outline`);
+    assert.equal(r2.statusCode, 412);
+  });
 });
 
 describe('章节批量操作', () => {

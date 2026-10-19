@@ -132,6 +132,16 @@ export const timelineInput = z.object({
 export const tocRequest = z.object({
   chapterCount: z.number().int().min(1).max(1000).optional(),
   instruction: z.string().max(2000).optional(),
+  /** 只生成章节名，不写大纲（快数倍，大纲可后期补） */
+  titlesOnly: z.boolean().optional(),
+});
+
+/** 批量补全章节大纲 */
+export const fillOutlinesRequest = z.object({
+  ids: z.array(z.string()).max(1000).optional(),
+  /** 只补大纲为空的章节（默认 true） */
+  onlyMissing: z.boolean().optional(),
+  instruction: z.string().max(2000).optional(),
 });
 
 /** 把目录写入作品 */

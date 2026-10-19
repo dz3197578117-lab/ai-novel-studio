@@ -345,6 +345,23 @@ SQLite 删除是提交式的，删了就没了，只能从 WAL 的旧页面里�
 
 再刷新即可。必要时重启 `pnpm dev`。**改完前端一定要看一眼实际 DOM**，别只看代码。
 
+**15. 目录生成分两段：先名字，后大纲**
+
+一次性「标题 + 大纲」写 1000 章要 30-35 分钟；只写标题只要约 4-5 分钟（实测 100 章 27 秒）。
+
+所以 `generate-toc` 支持 `titlesOnly`：
+
+- `true`：走 `buildTitleBatchPrompt`，每批 50 章、只产标题，`outline` 留空
+- `false`（默认）：原逻辑，每批 10 章、标题带大纲
+
+补大纲是独立动作，按需触发：
+
+- `POST /api/projects/:id/fill-outlines`：找出 `outline` 为空的章节，每批 10 章补写，后台任务
+- `POST /api/chapters/:id/fill-outline`：单章补，编辑器里「AI 写大纲」按钮用
+
+解析用 `parseOutlineFill()`，按返回里的 `index` 对齐（不是按顺序硬套），避免模型漏项时错位。
+改这两个 prompt 时记得同步 `parseTitleBatch` / `parseOutlineFill` 的字段名。
+
 ## 数据库迁移
 
 改表结构时：

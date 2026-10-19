@@ -68,6 +68,9 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   // 目录生成
   const [tocCount, setTocCount] = useState('20');
   const [tocInstruction, setTocInstruction] = useState('');
+  const [tocTitlesOnly, setTocTitlesOnly] = useState(true);
+  const [fillBusy, setFillBusy] = useState(false);
+  const [fillJob, setFillJob] = useState<{ done: number; total: number } | null>(null);
   const [tocPlan, setTocPlan] = useState<TocPlan | null>(null);
   const [tocBusy, setTocBusy] = useState(false);
   /** 后台任务进度 */
@@ -209,6 +212,7 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
         {
           chapterCount: Number(tocCount) || 20,
           instruction: tocInstruction.trim() || undefined,
+          titlesOnly: tocTitlesOnly,
         },
       );
 
@@ -236,6 +240,43 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     } finally {
       setTocBusy(false);
       setTocJob(null);
+    }
+  }
+
+  /** 批量补全缺失大纲（目录先出名字，大纲后期补） */
+  async function fillOutlines() {
+    setFillBusy(true);
+    setFillJob(null);
+    try {
+      const started = await api.post<{ jobId: string; chapterCount: number; batches: number }>(
+        `/api/projects/${project!.id}/fill-outlines`,
+        { onlyMissing: true },
+      );
+      type JobResp = {
+        status: 'running' | 'done' | 'error';
+        progress: { done: number; total: number };
+        result?: { filled: number; failed: string[] };
+        error?: string;
+      };
+      let job: JobResp | null = null;
+      for (let i = 0; i < 3600; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        job = await api.get<JobResp>(`/api/jobs/${started.jobId}`);
+        setFillJob(job.progress);
+        if (job.status === 'done') break;
+        if (job.status === 'error') throw new Error(job.error || '补全失败');
+      }
+      if (!job || job.status !== 'done' || !job.result) throw new Error('补全超时，请重试');
+      await useNovel.getState().selectProject(project!.id);
+      setError(
+        `已补全 ${job.result.filled} 章大纲` +
+          (job.result.failed.length ? `，${job.result.failed.length} 章失败` : ''),
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setFillBusy(false);
+      setFillJob(null);
     }
   }
 
@@ -475,6 +516,24 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
             </div>
           </div>
 
+          <label
+            className="hint"
+            style={{
+              display: 'flex',
+              gap: 6,
+              alignItems: 'center',
+              margin: '0 0 8px',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={tocTitlesOnly}
+              onChange={(e) => setTocTitlesOnly(e.target.checked)}
+            />
+            只生成章节名（快数倍，不写大纲；后期用下面「补全缺失大纲」一键补）
+          </label>
+
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
             <button className="primary" onClick={() => void genToc()} disabled={tocBusy}>
               {tocBusy && !tocPlan ? '生成中…' : '生成目录预览'}
@@ -533,6 +592,26 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── 补全缺失大纲 ── */}
+      {tab === 'toc' && (
+        <div className="settings-section" style={{ marginTop: 12 }}>
+          <h3 style={{ fontSize: 13, margin: '0 0 4px' }}>补全缺失大纲</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            目录只出名字时，章节没有大纲。点这个会找出所有**大纲为空**的章节，按批补齐（每批 10 章）。
+          </p>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button onClick={() => void fillOutlines()} disabled={fillBusy}>
+              {fillBusy ? '补全中…' : '补全缺失大纲'}
+            </button>
+            {fillBusy && fillJob && (
+              <span className="hint" style={{ margin: 0 }}>
+                已完成 {fillJob.done}/{fillJob.total} 批
+              </span>
+            )}
+          </div>
         </div>
       )}
 

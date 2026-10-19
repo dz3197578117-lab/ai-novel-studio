@@ -513,6 +513,135 @@ export function parseVolumeChapters(raw: string): { title: string; outline: stri
   });
 }
 
+// ───────────────────────── 只生成章节名（大纲后期补） ─────────────────────────
+
+/** 只产出「第N章 · 标题」的提示词。比连大纲一起写快数倍，适合上千章先铺骨架 */
+export function buildTitleBatchPrompt(params: {
+  projectTitle: string;
+  logline: string;
+  genre: string;
+  idea: string;
+  volumeTitles: string[];
+  volumeIndexFor: number[];
+  startNumber: number;
+  count: number;
+  previousTitles: string[];
+}): { system: string; user: string } {
+  const { projectTitle, logline, genre, idea, volumeTitles, volumeIndexFor, startNumber, count, previousTitles } =
+    params;
+  const endNumber = startNumber + count - 1;
+
+  const system = `你在为一部长篇小说起章节名。只输出章节标题，不要大纲。
+
+只输出一个 JSON 对象，不要解释，不要 markdown 代码块：
+{"chapters":[{"title":"第N章 · 四到八字标题","volumeIndex":0}]}
+
+硬性要求：
+- 从第 ${startNumber} 章连续排到第 ${endNumber} 章，共 ${count} 章
+- 标题要有信息量和钩子感，四到八字，不要「第N章 · 发展」这种空话
+- 同一卷内的标题要有节奏变化（短句/意象/悬念交替）
+- 不要与已有章节重复
+
+作品：《${projectTitle}》｜题材：${genre || '未定'}
+${logline ? `简介：${logline}` : ''}
+卷：${volumeTitles.map((t, i) => `${i}=${t}`).join('｜')}`;
+
+  const user = `## 全书设定
+${idea || '（无）'}
+
+## 已有章节（不要重复）
+${previousTitles.length ? previousTitles.slice(-40).join('、') : '（无）'}
+
+## 每章所属卷
+${volumeIndexFor.map((v, i) => `第${startNumber + i}章 → 卷${v}`).join('\n')}
+
+请输出第 ${startNumber} 到第 ${endNumber} 章的标题。`;
+
+  return { system, user };
+}
+
+/** 解析只含标题的批次；复用 DraftChapter 结构但 outline 为空 */
+export function parseTitleBatch(raw: string, volumeCount: number): DraftChapter[] {
+  const chapters = parseChapterBatch(raw, volumeCount);
+  return chapters.map((c) => ({ ...c, outline: '' }));
+}
+
+// ───────────────────────── 后期补大纲 ─────────────────────────
+
+/** 给定章节标题列表，批量写大纲 */
+export function buildOutlineFillPrompt(params: {
+  projectTitle: string;
+  logline: string;
+  genre: string;
+  styleGuide: string;
+  idea: string;
+  chapters: { number: number; title: string }[];
+  contextAround: string;
+}): { system: string; user: string } {
+  const { projectTitle, logline, genre, styleGuide, idea, chapters, contextAround } = params;
+
+  const system = `你在为已有的章节标题补写大纲。
+
+只输出一个 JSON 对象，不要解释，不要 markdown 代码块：
+{"outlines":[{"index":0,"outline":"60-120 字大纲：谁、做了什么、冲突是什么、结果如何、留下什么钩子"}]}
+
+要求：
+- index 必须与给定列表的序号严格对应，不要漏、不要换序
+- 大纲要具体到事件，不要写「推动剧情」「展现性格」这类空话
+- 要和已有章节的走向承接，不要重复已写内容
+
+作品：《${projectTitle}》｜题材：${genre || '未定'}｜文风：${styleGuide || '自然流畅'}
+${logline ? `简介：${logline}` : ''}`;
+
+  const user = `## 全书设定
+${idea || '（无）'}
+
+## 前后文参考
+${contextAround || '（无）'}
+
+## 要补大纲的章节
+${chapters.map((c, i) => `${i}. 第${c.number}章 ${c.title}`).join('\n')}
+
+请输出对应大纲。`;
+
+  return { system, user };
+}
+
+/** 解析补大纲结果：按 index 对齐 */
+export function parseOutlineFill(raw: string): string[] {
+  const text = String(raw ?? '')
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  const start = text.indexOf('{');
+  if (start < 0) throw new AiError('模型没有返回可解析的大纲，请重试。');
+  const end = text.lastIndexOf('}');
+  const candidate = end > start ? text.slice(start, end + 1) : text.slice(start);
+
+  let json: unknown = null;
+  try {
+    json = JSON.parse(candidate);
+  } catch {
+    json = repairTruncatedJson(raw);
+  }
+  if (!json || typeof json !== 'object') {
+    throw new AiError('模型返回的大纲格式有误，请重试。');
+  }
+
+  const arr = (json as Record<string, unknown>).outlines;
+  if (!Array.isArray(arr)) throw new AiError('模型没有给出大纲，请重试。');
+
+  const out: string[] = [];
+  for (const item of arr) {
+    const r = item as Record<string, unknown>;
+    const idx = Number(r.index);
+    const text = typeof r.outline === 'string' ? r.outline.trim() : '';
+    if (!Number.isFinite(idx) || !text) continue;
+    out[idx] = text;
+  }
+  return out;
+}
+
 // ───────────────────────── 单章大纲重生 ─────────────────────────
 
 /** 构造「只重做某一章」的提示词，带上前后章节保证衔接 */

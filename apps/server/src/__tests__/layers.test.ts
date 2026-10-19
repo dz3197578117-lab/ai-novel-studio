@@ -1,7 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Chapter, Project } from '@novelforge/shared';
-import { buildBeatsPrompt, buildScenesPrompt, parseSceneCards, scenesToText } from '../ai/layers.js';
+import {
+  buildBeatsPrompt,
+  buildScenesPrompt,
+  parseSceneCards,
+  scenesToText,
+} from '../ai/layers.js';
+import { buildTitleBatchPrompt, parseOutlineFill } from '../ai/draft.js';
 import { chunkText } from '../repos/layers.repo.js';
 
 const project = {
@@ -121,4 +127,38 @@ test('chunkText 按段落切分并控制长度', () => {
 test('chunkText 对空内容也有兜底', () => {
   const chunks = chunkText('');
   assert.ok(chunks.length >= 1);
+});
+
+test('buildTitleBatchPrompt 只要标题、不带大纲要求', () => {
+  const p = buildTitleBatchPrompt({
+    projectTitle: '雪落长夜',
+    logline: '少年剑修',
+    genre: '玄幻',
+    idea: '复仇',
+    volumeTitles: ['第一卷', '第二卷'],
+    volumeIndexFor: [0, 0, 1],
+    startNumber: 1,
+    count: 3,
+    previousTitles: [],
+  });
+  assert.match(p.system, /只输出章节标题/);
+  assert.match(p.user, /第1 到第3|第1到第3|第 1 到第 3/);
+  assert.match(p.user, /卷0/);
+});
+
+test('parseOutlineFill 按 index 对齐', () => {
+  const raw = JSON.stringify({
+    outlines: [
+      { index: 0, outline: '第一章发生了甲' },
+      { index: 2, outline: '第三章发生了丙' },
+    ],
+  });
+  const list = parseOutlineFill(raw);
+  assert.equal(list[0], '第一章发生了甲');
+  assert.equal(list[1], undefined);
+  assert.equal(list[2], '第三章发生了丙');
+});
+
+test('parseOutlineFill 对非法输入报错', () => {
+  assert.throws(() => parseOutlineFill('没有 JSON'), /没有返回可解析/);
 });
