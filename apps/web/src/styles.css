@@ -187,11 +187,70 @@ textarea {
   color: var(--muted);
   flex-shrink: 0;
 }
+.chapter-item .chapter-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 悬停才出现的小操作按钮，避免目录看起来很乱 */
+.row-actions {
+  display: flex;
+  gap: 1px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.chapter-item:hover .row-actions,
+.volume-label:hover .row-actions {
+  opacity: 1;
+}
+.icon-btn {
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: 4px;
+}
+.icon-btn:hover {
+  color: var(--text);
+  background: #333a45;
+}
+.icon-btn.danger:hover {
+  color: var(--danger);
+}
+.chapter-item.editing {
+  padding: 2px 4px;
+}
+.rename-input {
+  font-size: 12px;
+  padding: 3px 6px;
+  width: 100%;
+}
+.add-sub {
+  font-size: 11px;
+  padding: 3px 8px;
+}
 .volume-label {
   font-size: 11px;
   color: var(--muted);
   padding: 10px 6px 4px;
   letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.volume-label .volume-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
 }
 
 /* ── 编辑器 ── */
@@ -272,7 +331,27 @@ textarea {
   flex-shrink: 0;
 }
 
+.save-state {
+  font-size: 12px;
+  color: var(--muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
 /* ── AI 面板 ── */
+.ai-actions {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 6px;
+}
 .ai-tabs {
   display: flex;
   gap: 4px;

@@ -31,6 +31,8 @@ interface NovelState {
   selectProject: (id: ID) => Promise<void>;
   /** 解除当前作品（删除当前作品后调用），配合 loadProjects 会自动选中下一本 */
   clearProject: () => void;
+  /** 解除当前章节（删除当前章节后调用） */
+  clearChapter: () => void;
   loadChapter: (id: ID) => Promise<void>;
   refresh: () => Promise<void>;
   setError: (msg: string | null) => void;
@@ -67,6 +69,8 @@ export const useNovel = create<NovelState>((set, get) => ({
       images: [],
       currentChapter: null,
     }),
+
+  clearChapter: () => set({ currentChapter: null }),
 
   async loadProjects() {
     set({ loading: true });

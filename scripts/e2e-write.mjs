@@ -1,6 +1,6 @@
 /**
  * 端到端验证「AI 写作」完整交互：
- * 配置 mock 模型 → 打开章节 → 点生成 → 确认流式文本出现 → 添加到正文。
+ * 配置 mock 模型 → 打开章节 → 点生成 → 确认流式文本出现 → 追加到正文。
  */
 import { spawn } from 'node:child_process';
 import os from 'node:os';
@@ -144,13 +144,13 @@ async function main() {
     }
     check('流式生成结果已渲染', resultText.length > 10, `${resultText.length} 字: ${resultText.slice(0, 40)}`);
 
-    // 6. 点击「添加到正文」
+    // 6. 点击「追加到末尾」
     const applied = await evaluate(`(() => {
-      const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('添加到正文'));
+      const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('追加到末尾'));
       if (btn && !btn.disabled) { btn.click(); return true; }
       return false;
     })()`);
-    check('添加到正文按钮可点击', applied);
+    check('追加到末尾按钮可点击', applied);
 
     await sleep(2500); // 等自动保存
     const afterContent = await evaluate('document.querySelector("textarea.fiction").value');

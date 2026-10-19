@@ -32,6 +32,14 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     strictPort: false,
+    watch: {
+      /**
+       * 编辑器（VS Code、以及自动化工具）保存文件时会先写 `.xxx.tmpdir/xxx.tmp`
+       * 再重命名。Vite 的文件监听器一旦 watch 到这类临时文件就会因 EBUSY
+       * 直接崩溃，整个前端服务挂掉。这里显式忽略它们。
+       */
+      ignored: ['**/.*.tmpdir/**', '**/*.tmp', '**/.DS_Store', '**/*.swp'],
+    },
     proxy: {
       '/api': { target: API_TARGET, changeOrigin: true },
       '/files': { target: API_TARGET, changeOrigin: true },

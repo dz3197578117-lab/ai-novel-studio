@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { MemoryUsage, WriteMode } from '@novelforge/shared';
 import { useNovel } from '../store/novel';
 import { api } from '../api/client';
@@ -25,12 +25,15 @@ export function AiPanel() {
   const [memory, setMemory] = useState<MemoryUsage[]>([]);
   const [summary, setSummary] = useState('');
   const abortRef = useRef<(() => void) | null>(null);
+  /** 本次生成属于哪一章：切章后结果不该再往新章节里塞 */
+  const startedForRef = useRef<string | null>(null);
 
   function generate() {
     if (!project || !chapter) return;
     setResult('');
     setMemory([]);
     setStreaming(true);
+    startedForRef.current = chapter.id;
 
     abortRef.current = streamWrite(
       {
@@ -58,9 +61,41 @@ export function AiPanel() {
     setStreaming(false);
   }
 
+  // 生成过程中切了章节：停止生成，避免结果错位
+  useEffect(() => {
+    if (!streaming) return;
+    if (startedForRef.current && chapter?.id !== startedForRef.current) {
+      abortRef.current?.();
+      setStreaming(false);
+      setError('已切换章节，生成已停止');
+    }
+  }, [chapter?.id, streaming, setError]);
+
+  // Ctrl+Enter 生成
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (!streaming) generate();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streaming, mode, instruction, chapter?.id, project?.id]);
+
   function applyToText() {
     if (!result.trim()) return;
     window.dispatchEvent(new CustomEvent('novelforge:apply', { detail: result }));
+    setResult('');
+  }
+
+  /** 插入到正文光标处（有选区则替换选区）——改写/润色的自然落点 */
+  function insertToText() {
+    if (!result.trim()) return;
+    window.dispatchEvent(
+      new CustomEvent('novelforge:apply', { detail: { text: result, mode: 'insert' } }),
+    );
     setResult('');
   }
 
@@ -119,15 +154,19 @@ export function AiPanel() {
           </button>
           {streaming && <button onClick={stop}>停止</button>}
         </div>
+        <div className="hint">Ctrl+Enter 快速生成 · 改写/润色前先在正文里选中一段</div>
       </div>
 
       <div className="result-box">
         {result || (streaming ? '…' : <div className="empty">生成的文本会出现在这里</div>)}
       </div>
 
-      <div style={{ padding: 10, borderTop: '1px solid var(--border)', display: 'flex', gap: 6 }}>
+      <div className="ai-actions">
+        <button className="primary" style={{ flex: 1 }} onClick={insertToText} disabled={!result.trim()}>
+          插入到光标
+        </button>
         <button style={{ flex: 1 }} onClick={applyToText} disabled={!result.trim()}>
-          添加到正文
+          追加到末尾
         </button>
         <button onClick={makeSummary} title="生成该章摘要，供后续章节记忆使用">
           记忆摘要

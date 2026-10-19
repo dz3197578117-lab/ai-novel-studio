@@ -3,8 +3,13 @@ import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import type { Chapter, ChapterSummary, Project } from '@novelforge/shared';
 
-/** 左侧：作品切换 + 卷章树 */
-export function Sidebar({ onNewProject, onEditProject }: {
+type RenameTarget = { kind: 'chapter' | 'volume'; id: string } | null;
+
+/** 左侧：作品切换 + 卷章树（支持重命名与删除） */
+export function Sidebar({
+  onNewProject,
+  onEditProject,
+}: {
   onNewProject: () => void;
   onEditProject: () => void;
 }) {
@@ -15,8 +20,13 @@ export function Sidebar({ onNewProject, onEditProject }: {
   const currentChapter = useNovel((s) => s.currentChapter);
   const selectProject = useNovel((s) => s.selectProject);
   const loadChapter = useNovel((s) => s.loadChapter);
+  const clearChapter = useNovel((s) => s.clearChapter);
   const refresh = useNovel((s) => s.refresh);
+  const setError = useNovel((s) => s.setError);
+
   const [addingChapter, setAddingChapter] = useState(false);
+  const [renaming, setRenaming] = useState<RenameTarget>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const grouped = useMemo(() => {
     const byVolume = new Map<string, ChapterSummary[]>();
@@ -33,16 +43,63 @@ export function Sidebar({ onNewProject, onEditProject }: {
     return { byVolume, orphan };
   }, [chapters]);
 
+  /**
+   * 用「已有最大序号 + 1」而不是「章节数 + 1」，
+   * 否则删过章节后新建会撞名（曾经出现过两个「第5章」）。
+   */
+  function nextChapterTitle(): string {
+    const used = chapters
+      .map((c) => /^第(\d+)章/.exec(c.title)?.[1])
+      .filter((n): n is string => Boolean(n))
+      .map(Number);
+    return `第${(used.length ? Math.max(...used) : chapters.length) + 1}章`;
+  }
+
+  function nextVolumeTitle(): string {
+    const used = volumes
+      .map((v) => /^第(\d+)卷/.exec(v.title)?.[1])
+      .filter((n): n is string => Boolean(n))
+      .map(Number);
+    return `第${(used.length ? Math.max(...used) : volumes.length) + 1}卷`;
+  }
+
+  function startRename(kind: 'chapter' | 'volume', id: string, current: string) {
+    setRenaming({ kind, id });
+    setRenameValue(current);
+  }
+
+  async function commitRename() {
+    if (!renaming) return;
+    const title = renameValue.trim();
+    setRenaming(null);
+    if (!title) return;
+    try {
+      if (renaming.kind === 'chapter') {
+        await api.patch(`/api/chapters/${renaming.id}`, { title });
+        if (currentChapter?.id === renaming.id) await loadChapter(renaming.id);
+      } else {
+        await api.patch(`/api/volumes/${renaming.id}`, { title });
+      }
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function addChapter(volumeId: string | null) {
     if (!project) return;
     setAddingChapter(true);
     try {
       const c = await api.post<Chapter>(`/api/projects/${project.id}/chapters`, {
-        title: `第${chapters.length + 1}章`,
+        title: nextChapterTitle(),
         volumeId,
       });
       await refresh();
       await loadChapter(c.id);
+      // 新建后直接进入改名状态，省去再找一次
+      startRename('chapter', c.id, c.title);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setAddingChapter(false);
     }
@@ -50,10 +107,49 @@ export function Sidebar({ onNewProject, onEditProject }: {
 
   async function addVolume() {
     if (!project) return;
-    await api.post(`/api/projects/${project.id}/volumes`, {
-      title: `第${volumes.length + 1}卷`,
-    });
-    await refresh();
+    try {
+      await api.post(`/api/projects/${project.id}/volumes`, { title: nextVolumeTitle() });
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function removeChapter(c: ChapterSummary) {
+    const hasText = c.wordCount > 0;
+    const ok = confirm(
+      hasText
+        ? `删除「${c.title}」？\n\n该章有 ${c.wordCount} 字正文，删除后不可恢复。`
+        : `删除「${c.title}」？`,
+    );
+    if (!ok) return;
+    try {
+      await api.del(`/api/chapters/${c.id}`);
+      const wasCurrent = currentChapter?.id === c.id;
+      if (wasCurrent) clearChapter();
+      await refresh();
+      if (wasCurrent) {
+        const rest = useNovel.getState().chapters;
+        if (rest.length > 0) await loadChapter(rest[0]!.id);
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function removeVolume(volumeId: string, title: string, chapterCount: number) {
+    const ok = confirm(
+      chapterCount > 0
+        ? `删除「${title}」？\n\n该卷下的 ${chapterCount} 个章节会保留，但不再归属任何卷。`
+        : `删除「${title}」？`,
+    );
+    if (!ok) return;
+    try {
+      await api.del(`/api/volumes/${volumeId}`);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   const totalWords = chapters.reduce((s, c) => s + c.wordCount, 0);
@@ -100,7 +196,7 @@ export function Sidebar({ onNewProject, onEditProject }: {
         <div className="section-title">
           <span>目录</span>
           <span style={{ display: 'flex', gap: 2 }}>
-            <button className="ghost" onClick={addVolume} title="新建卷">
+            <button className="ghost" onClick={addVolume} disabled={!project} title="新建卷">
               卷＋
             </button>
             <button
@@ -114,37 +210,101 @@ export function Sidebar({ onNewProject, onEditProject }: {
           </span>
         </div>
 
-        {volumes.map((v) => (
-          <div key={v.id}>
-            <div className="volume-label">{v.title}</div>
-            {(grouped.byVolume.get(v.id) ?? []).map((c) => (
-              <ChapterRow
-                key={c.id}
-                chapter={c}
-                active={currentChapter?.id === c.id}
-                onClick={() => loadChapter(c.id)}
-              />
-            ))}
-            <button
-              className="ghost"
-              style={{ fontSize: 11, padding: '3px 8px' }}
-              onClick={() => addChapter(v.id)}
-            >
-              ＋ 本章节
-            </button>
-          </div>
-        ))}
+        {volumes.map((v) => {
+          const list = grouped.byVolume.get(v.id) ?? [];
+          const isRenamingVolume = renaming?.kind === 'volume' && renaming.id === v.id;
+          return (
+            <div key={v.id} className="volume-block">
+              {isRenamingVolume ? (
+                <input
+                  className="rename-input"
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={() => void commitRename()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void commitRename();
+                    if (e.key === 'Escape') setRenaming(null);
+                  }}
+                />
+              ) : (
+                <div className="volume-label">
+                  <span
+                    className="volume-name"
+                    onDoubleClick={() => startRename('volume', v.id, v.title)}
+                    title="双击重命名"
+                  >
+                    {v.title}
+                  </span>
+                  <span className="row-actions">
+                    <button
+                      className="icon-btn"
+                      title="重命名本卷"
+                      onClick={() => startRename('volume', v.id, v.title)}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      className="icon-btn danger"
+                      title="删除本卷（章节保留）"
+                      onClick={() => void removeVolume(v.id, v.title, list.length)}
+                    >
+                      ×
+                    </button>
+                  </span>
+                </div>
+              )}
+
+              {list.map((c) => (
+                <ChapterRow
+                  key={c.id}
+                  chapter={c}
+                  active={currentChapter?.id === c.id}
+                  renaming={renaming?.kind === 'chapter' && renaming.id === c.id}
+                  renameValue={renameValue}
+                  onRenameChange={setRenameValue}
+                  onRenameCommit={() => void commitRename()}
+                  onRenameCancel={() => setRenaming(null)}
+                  onClick={() => void loadChapter(c.id)}
+                  onStartRename={() => startRename('chapter', c.id, c.title)}
+                  onDelete={() => void removeChapter(c)}
+                />
+              ))}
+
+              <button
+                className="ghost add-sub"
+                onClick={() => void addChapter(v.id)}
+                disabled={addingChapter}
+              >
+                ＋ 本章节
+              </button>
+            </div>
+          );
+        })}
 
         {grouped.orphan.map((c) => (
           <ChapterRow
             key={c.id}
             chapter={c}
             active={currentChapter?.id === c.id}
-            onClick={() => loadChapter(c.id)}
+            renaming={renaming?.kind === 'chapter' && renaming.id === c.id}
+            renameValue={renameValue}
+            onRenameChange={setRenameValue}
+            onRenameCommit={() => void commitRename()}
+            onRenameCancel={() => setRenaming(null)}
+            onClick={() => void loadChapter(c.id)}
+            onStartRename={() => startRename('chapter', c.id, c.title)}
+            onDelete={() => void removeChapter(c)}
           />
         ))}
 
-        {chapters.length === 0 && <div className="empty">还没有章节<br />点右上角「章＋」开始</div>}
+        {chapters.length === 0 && (
+          <div className="empty">
+            还没有章节
+            <br />
+            点右上角「章＋」开始
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -153,22 +313,63 @@ export function Sidebar({ onNewProject, onEditProject }: {
 function ChapterRow({
   chapter,
   active,
+  renaming,
+  renameValue,
+  onRenameChange,
+  onRenameCommit,
+  onRenameCancel,
   onClick,
+  onStartRename,
+  onDelete,
 }: {
   chapter: ChapterSummary;
   active: boolean;
+  renaming: boolean;
+  renameValue: string;
+  onRenameChange: (v: string) => void;
+  onRenameCommit: () => void;
+  onRenameCancel: () => void;
   onClick: () => void;
+  onStartRename: () => void;
+  onDelete: () => void;
 }) {
+  if (renaming) {
+    return (
+      <div className="chapter-item editing">
+        <input
+          className="rename-input"
+          autoFocus
+          value={renameValue}
+          onChange={(e) => onRenameChange(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onBlur={onRenameCommit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onRenameCommit();
+            if (e.key === 'Escape') onRenameCancel();
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
-    <div className={`chapter-item${active ? ' active' : ''}`} onClick={onClick}>
-      <span
-        style={{
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {chapter.title}
+    <div
+      className={`chapter-item${active ? ' active' : ''}`}
+      onClick={onClick}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onStartRename();
+      }}
+      title="双击重命名"
+    >
+      <span className="chapter-name">{chapter.title}</span>
+      <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+        <button className="icon-btn" title="重命名" onClick={onStartRename}>
+          ✎
+        </button>
+        <button className="icon-btn danger" title="删除章节" onClick={onDelete}>
+          ×
+        </button>
       </span>
       <span className="wc">{chapter.wordCount > 0 ? chapter.wordCount : '·'}</span>
     </div>

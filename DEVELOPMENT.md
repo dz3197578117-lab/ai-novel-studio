@@ -153,6 +153,30 @@ pnpm push
 git -c http.curloptResolve=github.com:443:140.82.112.3 push
 ```
 
+**7. 编辑器保存文件导致 Vite 整个挂掉（EBUSY）**
+
+VS Code、JetBrains 和多数自动化工具保存文件时是「先写 `.xxx.tmpdir/xxx.tmp`，再重命名」。
+Vite 的文件监听器一旦 watch 到那个临时文件，会抛 `EBUSY: resource busy or locked` 并**直接退出**，
+表现为页面突然连不上（ERR_CONNECTION_REFUSED），而终端里 Vite 已经死了。
+
+已在 `vite.config.ts` 里忽略这类临时文件：
+
+```ts
+server: {
+  watch: {
+    ignored: ['**/.*.tmpdir/**', '**/*.tmp', '**/.DS_Store', '**/*.swp'],
+  },
+}
+```
+
+遇到「页面打不开但后端还活着」，先看 `scripts\dev.mjs` 的日志里有没有 EBUSY。
+
+**8. 切章节丢正文**
+
+早先自动保存是 1.2 秒防抖，切章时组件被卸载、定时器被清掉，最后几秒的输入就没了。
+现在 `Editor` 维护一份编辑快照，切章时先把上一章的未保存内容 `PATCH` 回去，再加载新章；
+另外加了 `Ctrl+S` 立即保存和离开页面前的浏览器提醒。
+
 ## 数据库迁移
 
 改表结构时：
