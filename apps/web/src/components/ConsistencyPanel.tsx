@@ -11,7 +11,12 @@ import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import { Modal } from './Modal';
 
-type Tab = 'brainstorm' | 'foreshadow' | 'timeline' | 'knowledge' | 'check';
+type Tab = 'brainstorm' | 'foreshadow' | 'timeline' | 'knowledge' | 'toc' | 'check';
+
+interface TocPlan {
+  volumes: { title: string; summary: string }[];
+  chapters: { volumeIndex: number; title: string; outline: string }[];
+}
 
 const STATUS_LABEL: Record<string, string> = {
   planted: '未回收',
@@ -59,6 +64,12 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const [kSource, setKSource] = useState('');
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<KnowledgeHit[]>([]);
+
+  // 目录生成
+  const [tocCount, setTocCount] = useState('20');
+  const [tocInstruction, setTocInstruction] = useState('');
+  const [tocPlan, setTocPlan] = useState<TocPlan | null>(null);
+  const [tocBusy, setTocBusy] = useState(false);
 
   // 新增表单
   const [fsTitle, setFsTitle] = useState('');
@@ -168,6 +179,42 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     const text = await file.text();
     await addDoc(text, file.name.replace(/\.[^.]+$/, ''), file.name);
     e.target.value = '';
+  }
+
+  async function genToc() {
+    setTocBusy(true);
+    setTocPlan(null);
+    try {
+      const plan = await api.post<TocPlan>(`/api/projects/${project!.id}/generate-toc`, {
+        chapterCount: Number(tocCount) || 20,
+        instruction: tocInstruction.trim() || undefined,
+      });
+      setTocPlan(plan);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTocBusy(false);
+    }
+  }
+
+  async function applyToc() {
+    if (!tocPlan) return;
+    setTocBusy(true);
+    try {
+      const r = await api.post<{ counts: { volumes: number; chapters: number } }>(
+        `/api/projects/${project!.id}/apply-toc`,
+        tocPlan,
+      );
+      setTocPlan(null);
+      await useNovel.getState().selectProject(project!.id);
+      setError(
+        `已写入 ${r.counts.volumes} 卷 ${r.counts.chapters} 章（追加到现有目录末尾）`,
+      );
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setTocBusy(false);
+    }
   }
 
   async function addForeshadow() {
@@ -282,10 +329,95 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
         <button className={tab === 'knowledge' ? 'active' : ''} onClick={() => setTab('knowledge')}>
           知识库{docs.length > 0 ? `（${docs.length}）` : ''}
         </button>
+        <button className={tab === 'toc' ? 'active' : ''} onClick={() => setTab('toc')}>
+          AI 生成目录
+        </button>
         <button className={tab === 'check' ? 'active' : ''} onClick={() => setTab('check')}>
           一致性检查
         </button>
       </div>
+
+      {/* ── AI 生成目录 ── */}
+      {tab === 'toc' && (
+        <div className="settings-section">
+          <p className="hint" style={{ marginTop: 0 }}>
+            用书名、简介、脑暴板、现有章节和设定，让 AI 规划卷章目录（含每章大纲）。
+            先预览，确认后才会追加写入，不会删你已有的章节。
+          </p>
+
+          <div className="row">
+            <div className="field" style={{ flex: 1 }}>
+              <label>规划章数</label>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={tocCount}
+                onChange={(e) => setTocCount(e.target.value)}
+              />
+            </div>
+            <div className="field" style={{ flex: 3 }}>
+              <label>额外要求（可空）</label>
+              <input
+                value={tocInstruction}
+                onChange={(e) => setTocInstruction(e.target.value)}
+                placeholder="如：前半段校园、后半段商战；每 5 章一个小高潮"
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+            <button className="primary" onClick={() => void genToc()} disabled={tocBusy}>
+              {tocBusy && !tocPlan ? '生成中…' : '生成目录预览'}
+            </button>
+            {tocPlan && (
+              <>
+                <span className="hint" style={{ margin: 0 }}>
+                  {tocPlan.volumes.length} 卷 / {tocPlan.chapters.length} 章
+                </span>
+                <button onClick={() => void applyToc()} disabled={tocBusy}>
+                  写入目录
+                </button>
+              </>
+            )}
+          </div>
+
+          {tocBusy && (
+            <div className="empty" style={{ padding: '8px 0' }}>
+              正在规划目录，章数多时需要几分钟…
+            </div>
+          )}
+
+          {tocPlan && (
+            <div className="draft-outline" style={{ maxHeight: 320 }}>
+              {tocPlan.volumes.map((v, vi) => (
+                <div key={`${v.title}-${vi}`}>
+                  <div className="draft-volume">{v.title}</div>
+                  {tocPlan.chapters
+                    .filter((c) => c.volumeIndex === vi)
+                    .map((c, ci) => (
+                      <div className="draft-chapter" key={`${c.title}-${ci}`}>
+                        <div className="draft-chapter-title">{c.title}</div>
+                        <div className="summary">{c.outline}</div>
+                      </div>
+                    ))}
+                </div>
+              ))}
+              {tocPlan.chapters.filter(
+                (c) => c.volumeIndex >= tocPlan.volumes.length || c.volumeIndex < 0,
+              ).length > 0 && (
+                <div className="draft-volume">
+                  未归属卷的章节：
+                  {tocPlan.chapters
+                    .filter((c) => c.volumeIndex >= tocPlan.volumes.length || c.volumeIndex < 0)
+                    .map((c) => c.title)
+                    .join('、')}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── 脑暴 ── */}
       {tab === 'brainstorm' && (

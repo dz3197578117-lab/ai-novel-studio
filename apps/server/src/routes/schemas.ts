@@ -128,6 +128,30 @@ export const timelineInput = z.object({
   importance: z.number().int().min(1).max(3).optional(),
 });
 
+/** 为已有作品生成目录 */
+export const tocRequest = z.object({
+  chapterCount: z.number().int().min(1).max(1000).optional(),
+  instruction: z.string().max(2000).optional(),
+});
+
+/** 把目录写入作品 */
+export const tocApply = z.object({
+  volumes: z
+    .array(z.object({ title: z.string().min(1).max(200), summary: z.string().max(20_000).optional() }))
+    .max(20)
+    .optional(),
+  chapters: z
+    .array(
+      z.object({
+        volumeIndex: z.number().int().min(0).max(30),
+        title: z.string().min(1).max(200),
+        outline: z.string().max(20_000).optional(),
+      }),
+    )
+    .min(1, '至少需要一章')
+    .max(1000),
+});
+
 /** 一套模型配置 */
 export const profileInput = z.object({
   name: z.string().min(1, '给这套配置起个名字').max(60),

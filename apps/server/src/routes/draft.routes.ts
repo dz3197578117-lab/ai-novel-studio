@@ -19,8 +19,15 @@ import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js
 import { AiError, complete, completeDetailed, loadTextConfig } from '../ai/client.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
-import { createChapter, createVolume } from '../repos/chapters.repo.js';
-import { draftRequestSchema, interviewRequest, novelDraftSchema, chapterRegenRequest } from './schemas.js';
+import { createChapter, createVolume, listChapters } from '../repos/chapters.repo.js';
+import {
+  draftRequestSchema,
+  interviewRequest,
+  novelDraftSchema,
+  chapterRegenRequest,
+  tocApply,
+  tocRequest,
+} from './schemas.js';
 
 /** 单次调用的超时时间（含重试等待） */
 const DRAFT_CALL_TIMEOUT_MS = 180_000;
@@ -308,6 +315,115 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
         : `重生成失败：${(e as Error).message}`;
       return reply.code(502).send({ error: 'regen_failed', message: msg });
     }
+  });
+
+  /**
+   * 为「已有作品」生成卷章目录（只预览，不落库）。
+   * 复用整本生成的分批逻辑：把作品现有信息拼成需求，再走同一套 prompt。
+   */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/generate-toc', async (req, reply) => {
+    const project = getProject(req.params.id);
+    if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+    const parsed = tocRequest.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '参数校验失败',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    const chapterCount = Math.max(1, Math.min(MAX_CHAPTERS, parsed.data.chapterCount ?? 20));
+    const existing = listChapters(project.id);
+
+    // 把作品现有信息拼成「我要什么故事」的需求
+    const ideaParts = [
+      `书名：${project.title}`,
+      project.logline ? `简介：${project.logline}` : '',
+      project.genre ? `题材：${project.genre}` : '',
+      project.styleGuide ? `文风：${project.styleGuide}` : '',
+      project.brainstorm ? `作者的想法：\n${project.brainstorm.slice(0, 2000)}` : '',
+      existing.length
+        ? `已有章节（新目录要能接上，不要重复）：${existing
+            .slice(0, 30)
+            .map((c) => c.title)
+            .join('、')}`
+        : '',
+      parsed.data.instruction ? `额外要求：${parsed.data.instruction}` : '',
+    ].filter(Boolean);
+
+    const request = {
+      idea: ideaParts.join('\n'),
+      genre: project.genre,
+      chapterCount,
+    };
+
+    try {
+      const draft =
+        chapterCount <= SINGLE_CALL_MAX_CHAPTERS
+          ? await generateSingle(config, request, chapterCount)
+          : await generateChunked(config, request, chapterCount);
+      return { volumes: draft.volumes, chapters: draft.chapters };
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(502).send({ error: 'toc_failed', message: e.message });
+      }
+      return reply
+        .code(502)
+        .send({ error: 'toc_failed', message: `生成目录失败：${(e as Error).message}` });
+    }
+  });
+
+  /** 把预览确认后的目录写入现有作品（追加，不删除已有章节） */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/apply-toc', async (req, reply) => {
+    const project = getProject(req.params.id);
+    if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+    const body = req.body as { volumes?: unknown; chapters?: unknown } | undefined;
+    const parsed = tocApply.safeParse(body);
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '目录数据不完整，无法写入',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    const volumeIds: string[] = [];
+    for (const v of parsed.data.volumes ?? []) {
+      const created = createVolume(project.id, v.title, v.summary ?? '');
+      volumeIds.push(created.id);
+    }
+
+    let count = 0;
+    for (const c of parsed.data.chapters) {
+      const volumeId = volumeIds.length
+        ? volumeIds[Math.min(c.volumeIndex, volumeIds.length - 1)] ?? null
+        : null;
+      createChapter(project.id, {
+        title: c.title,
+        volumeId,
+        outline: c.outline ?? '',
+        content: '',
+        status: 'outline',
+      });
+      count++;
+    }
+
+    return reply.code(201).send({
+      counts: { volumes: volumeIds.length, chapters: count },
+    });
   });
 
   /** 把确认后的方案落库成一部真正的作品 */

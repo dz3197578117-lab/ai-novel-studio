@@ -523,6 +523,74 @@ describe('模型配置（多套）', () => {
   });
 });
 
+describe('AI 生成目录（已有作品）', () => {
+  let projectId = '';
+
+  before(async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '目录测试' })).body);
+    projectId = p.id;
+  });
+
+  test('未配置模型时生成目录返回 412', async () => {
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '目录无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+    const res = await post(`/api/projects/${projectId}/generate-toc`, { chapterCount: 10 });
+    assert.equal(res.statusCode, 412);
+  });
+
+  test('把目录写入作品：卷章按 volumeIndex 正确归属', async () => {
+    const res = await post(`/api/projects/${projectId}/apply-toc`, {
+      volumes: [
+        { title: '第一卷 · 开端', summary: '起步' },
+        { title: '第二卷 · 转折', summary: '发展' },
+      ],
+      chapters: [
+        { volumeIndex: 0, title: '第1章 · 雪夜', outline: '开端' },
+        { volumeIndex: 1, title: '第2章 · 归来', outline: '转折' },
+      ],
+    });
+    assert.equal(res.statusCode, 201);
+    const body = JSON.parse(res.body) as { counts: { volumes: number; chapters: number } };
+    assert.equal(body.counts.volumes, 2);
+    assert.equal(body.counts.chapters, 2);
+
+    const volumes = JSON.parse((await get(`/api/projects/${projectId}/volumes`)).body) as {
+      id: string;
+      title: string;
+    }[];
+    const chapters = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      title: string;
+      volumeId: string | null;
+    }[];
+    assert.equal(chapters.length, 2);
+    assert.equal(chapters[0]!.volumeId, volumes[0]!.id);
+    assert.equal(chapters[1]!.volumeId, volumes[1]!.id);
+  });
+
+  test('再次写入是追加，不覆盖已有章节', async () => {
+    const res = await post(`/api/projects/${projectId}/apply-toc`, {
+      chapters: [{ volumeIndex: 0, title: '第3章 · 追加', outline: '' }],
+    });
+    assert.equal(res.statusCode, 201);
+    const chapters = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body);
+    assert.equal(chapters.length, 3);
+  });
+
+  test('目录缺章节时拒绝写入', async () => {
+    const res = await post(`/api/projects/${projectId}/apply-toc`, { chapters: [] });
+    assert.equal(res.statusCode, 400);
+  });
+});
+
 describe('分层创作与知识库', () => {
   let projectId = '';
   let chapterId = '';
