@@ -13,7 +13,7 @@ import {
 import { listChapters, getChapter } from '../repos/chapters.repo.js';
 import { listEntities } from '../repos/entities.repo.js';
 import { getProject } from '../repos/projects.repo.js';
-import { AiError, completeDetailed, loadTextConfig } from '../ai/client.js';
+import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { buildConsistencyPrompt, parseConsistencyReport } from '../ai/consistency.js';
 import { foreshadowInput, timelineInput } from './schemas.js';
 
@@ -120,16 +120,19 @@ export async function consistencyRoutes(app: FastifyInstance): Promise<void> {
       });
 
       try {
-        const res = await completeDetailed(
+        // 检查可能跑一分钟以上，用流式累加避免被服务商掐断
+        const content = await completeAccumulated(
           config,
           [
             { role: 'system', content: prompt.system },
             { role: 'user', content: prompt.user },
           ],
-          AbortSignal.timeout(CHECK_TIMEOUT_MS),
-          { maxTokens: Math.max(config.maxTokens || 0, 4096) },
+          {
+            maxTokens: Math.max(config.maxTokens || 0, 4096),
+            signal: AbortSignal.timeout(CHECK_TIMEOUT_MS),
+          },
         );
-        const report: ConsistencyReport = parseConsistencyReport(res.content, prompt.scope);
+        const report: ConsistencyReport = parseConsistencyReport(content, prompt.scope);
         return report;
       } catch (e) {
         if (e instanceof AiError) {

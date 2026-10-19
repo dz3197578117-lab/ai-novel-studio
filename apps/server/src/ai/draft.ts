@@ -14,8 +14,8 @@ export const MAX_CHAPTERS = 1000;
 
 /** 一次调用能稳妥装下的章节数；超过就分批生成 */
 export const SINGLE_CALL_MAX_CHAPTERS = 10;
-/** 分批时每批多少章。20 章 ≈ 2000 token，给 8192 预算留足思考空间 */
-export const CHAPTER_BATCH_SIZE = 20;
+/** 分批时每批多少章。20 章一轮容易跑满 60 秒被服务商掐断，压到 10 更稳 */
+export const CHAPTER_BATCH_SIZE = 10;
 
 /** 每卷大致放多少章 */
 const CHAPTERS_PER_VOLUME = 40;

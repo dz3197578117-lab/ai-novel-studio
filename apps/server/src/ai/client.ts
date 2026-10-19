@@ -5,6 +5,8 @@ export interface StreamChatOptions {
   config: AiProviderConfig;
   messages: ChatMessage[];
   signal?: AbortSignal;
+  /** 覆盖最大输出 tokens */
+  maxTokens?: number;
 }
 
 export class AiError extends Error {
@@ -114,7 +116,7 @@ export function loadTextConfig(): AiProviderConfig {
 export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<
   { type: 'delta'; text: string } | { type: 'usage'; usage: TokenUsage }
 > {
-  const { config, messages, signal } = opts;
+  const { config, messages, signal, maxTokens } = opts;
   const url = joinUrl(config.baseUrl, '/chat/completions');
 
   const res = await postWithRetry(
@@ -124,7 +126,7 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<
       messages,
       stream: true,
       temperature: config.temperature ?? 0.8,
-      max_tokens: config.maxTokens || undefined,
+      max_tokens: (maxTokens ?? config.maxTokens) || undefined,
     },
     config,
     signal,
@@ -239,6 +241,30 @@ export async function complete(
   signal?: AbortSignal,
 ): Promise<string> {
   return (await completeDetailed(config, messages, signal)).content;
+}
+
+/**
+ * 用「流式」请求拿完整文本。
+ *
+ * 为什么不用非流式：生成整章/整批大纲可能跑 60 秒以上，
+ * 多数服务商对长时间无数据的非流式请求会直接掐断连接（表现为 terminated）。
+ * 流式下数据一直在流动，不会触发空闲超时。
+ */
+export async function completeAccumulated(
+  config: AiProviderConfig,
+  messages: ChatMessage[],
+  opts: { maxTokens?: number; signal?: AbortSignal } = {},
+): Promise<string> {
+  let out = '';
+  for await (const ev of streamChat({
+    config,
+    messages,
+    signal: opts.signal,
+    maxTokens: opts.maxTokens,
+  })) {
+    if (ev.type === 'delta') out += ev.text;
+  }
+  return out;
 }
 
 function joinUrl(base: string, suffix: string): string {

@@ -9,7 +9,7 @@ import {
 } from '../repos/layers.repo.js';
 import { getChapter, listPriorSummaries, updateChapter } from '../repos/chapters.repo.js';
 import { getProject } from '../repos/projects.repo.js';
-import { AiError, completeDetailed, loadTextConfig } from '../ai/client.js';
+import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { buildBeatsPrompt, buildScenesPrompt, parseSceneCards } from '../ai/layers.js';
 import { sceneInput } from './schemas.js';
 
@@ -79,16 +79,18 @@ export async function layerRoutes(app: FastifyInstance): Promise<void> {
     const prompt = buildBeatsPrompt(project, chapter, priors);
 
     try {
-      const res = await completeDetailed(
+      const content = await completeAccumulated(
         config,
         [
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
         ],
-        AbortSignal.timeout(LAYER_TIMEOUT_MS),
-        { maxTokens: Math.max(config.maxTokens || 0, 2048) },
+        {
+          maxTokens: Math.max(config.maxTokens || 0, 2048),
+          signal: AbortSignal.timeout(LAYER_TIMEOUT_MS),
+        },
       );
-      const beats = res.content.trim();
+      const beats = content.trim();
       if (!beats) return reply.code(502).send({ error: 'empty', message: '模型没有产出细纲' });
       updateChapter(chapter.id, { beats });
       return { beats };
@@ -122,16 +124,18 @@ export async function layerRoutes(app: FastifyInstance): Promise<void> {
 
     const prompt = buildScenesPrompt(project, chapter);
     try {
-      const res = await completeDetailed(
+      const content = await completeAccumulated(
         config,
         [
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
         ],
-        AbortSignal.timeout(LAYER_TIMEOUT_MS),
-        { maxTokens: Math.max(config.maxTokens || 0, 4096) },
+        {
+          maxTokens: Math.max(config.maxTokens || 0, 4096),
+          signal: AbortSignal.timeout(LAYER_TIMEOUT_MS),
+        },
       );
-      const scenes: SceneInput[] = parseSceneCards(res.content);
+      const scenes: SceneInput[] = parseSceneCards(content);
       clearScenes(chapter.id);
       const created = scenes.map((s) => createScene(project.id, chapter.id, s));
       return { scenes: created };

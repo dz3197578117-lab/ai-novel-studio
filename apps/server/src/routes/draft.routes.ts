@@ -16,7 +16,7 @@ import {
   volumeCountFor,
 } from '../ai/draft.js';
 import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js';
-import { AiError, complete, completeDetailed, loadTextConfig } from '../ai/client.js';
+import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import { createChapter, createVolume, listChapters } from '../repos/chapters.repo.js';
@@ -63,26 +63,22 @@ async function generateSingle(
   chapterCount: number,
 ): Promise<NovelDraft> {
   const prompt = buildDraftPrompt({ ...req, chapterCount });
-  const res = await completeDetailed(
+  // 用流式累加，避免长时间非流式请求被服务商掐断
+  const content = await completeAccumulated(
     config,
     [
       { role: 'system', content: prompt.system },
       { role: 'user', content: prompt.user },
     ],
-    AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
-    { maxTokens: draftBudget(config) },
+    { maxTokens: draftBudget(config), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
   );
 
   try {
-    return parseDraft(res.content);
+    return parseDraft(content);
   } catch (e) {
-    if (res.finishReason === 'length') {
-      throw new AiError(
-        '模型输出被截断（达到最大输出 tokens）：这一次要写的章节太多。' +
-          '请把规划章数调小，或在设置里把该配置的「最大输出 tokens」调大后重试。',
-      );
-    }
-    throw e;
+    throw new AiError(
+      `${(e as Error).message}（如果反复失败，把规划章数调小一些再试）`,
+    );
   }
 }
 
@@ -99,16 +95,15 @@ async function generateChunked(
 
   // 1. 骨架
   const skPrompt = buildSkeletonPrompt({ ...req, chapterCount });
-  const skRes = await completeDetailed(
+  const skContent = await completeAccumulated(
     config,
     [
       { role: 'system', content: skPrompt.system },
       { role: 'user', content: skPrompt.user },
     ],
-    AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
-    { maxTokens: budget },
+    { maxTokens: budget, signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
   );
-  const skeleton = parseSkeleton(skRes.content);
+  const skeleton = parseSkeleton(skContent);
 
   // 保证卷数够用（模型可能少给）
   const wantVolumes = volumeCountFor(chapterCount);
@@ -140,19 +135,18 @@ async function generateChunked(
       previousTitles: chapters.map((c) => c.title),
     });
 
-    const res = await completeDetailed(
+    const batchContent = await completeAccumulated(
       config,
       [
         { role: 'system', content: prompt.system },
         { role: 'user', content: prompt.user },
       ],
-      AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
-      { maxTokens: budget },
+      { maxTokens: budget, signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
     );
 
     let got: DraftChapter[];
     try {
-      got = parseChapterBatch(res.content, skeleton.volumes.length);
+      got = parseChapterBatch(batchContent, skeleton.volumes.length);
     } catch (e) {
       throw new AiError(
         `第 ${batch}/${batchTotal} 批章节生成失败（${(e as Error).message}）。` +
@@ -292,17 +286,16 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const prompt = buildChapterRegenPrompt(parsed.data);
-      const res = await completeDetailed(
+      const content = await completeAccumulated(
         config,
         [
           { role: 'system', content: prompt.system },
           { role: 'user', content: prompt.user },
         ],
-        AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS),
-        { maxTokens: draftBudget(config) },
+        { maxTokens: draftBudget(config), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
       );
       const chapter = parseRegeneratedChapter(
-        res.content,
+        content,
         Math.max(1, parsed.data.volumes.length),
       );
       return { chapter };
