@@ -75,6 +75,20 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     null,
   );
 
+  // 按卷扩展
+  const volumes = useNovel((s) => s.volumes);
+  const [exVolumeId, setExVolumeId] = useState('');
+  const [exVolumeTitle, setExVolumeTitle] = useState('');
+  const [exCount, setExCount] = useState('50');
+  const [exInstruction, setExInstruction] = useState('');
+  const [exBusy, setExBusy] = useState(false);
+  const [exJob, setExJob] = useState<{ done: number; total: number } | null>(null);
+  const [exPlan, setExPlan] = useState<{
+    volumeTitle: string;
+    volumeSummary: string;
+    chapters: { title: string; outline: string }[];
+  } | null>(null);
+
   // 新增表单
   const [fsTitle, setFsTitle] = useState('');
   const [fsDetail, setFsDetail] = useState('');
@@ -242,6 +256,73 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
       setError((e as Error).message);
     } finally {
       setTocBusy(false);
+    }
+  }
+
+  /** 按卷生成本卷章节（后台任务） */
+  async function genVolume() {
+    setExBusy(true);
+    setExPlan(null);
+    setExJob(null);
+    try {
+      const started = await api.post<{ jobId: string; batches: number; volumeTitle: string }>(
+        `/api/projects/${project!.id}/expand-volume`,
+        {
+          volumeId: exVolumeId || undefined,
+          volumeTitle: exVolumeTitle.trim() || undefined,
+          chapterCount: Number(exCount) || 50,
+          instruction: exInstruction.trim() || undefined,
+        },
+      );
+
+      type JobResp = {
+        status: 'running' | 'done' | 'error';
+        progress: { done: number; total: number };
+        result?: {
+          volumeTitle: string;
+          volumeSummary: string;
+          chapters: { title: string; outline: string }[];
+        };
+        error?: string;
+      };
+      let job: JobResp | null = null;
+      for (let i = 0; i < 3600; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        job = await api.get<JobResp>(`/api/jobs/${started.jobId}`);
+        setExJob(job.progress);
+        if (job.status === 'done') break;
+        if (job.status === 'error') throw new Error(job.error || '生成失败');
+      }
+      if (!job || job.status !== 'done' || !job.result) throw new Error('生成超时，请重试');
+      setExPlan(job.result);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExBusy(false);
+      setExJob(null);
+    }
+  }
+
+  async function applyVolume() {
+    if (!exPlan) return;
+    setExBusy(true);
+    try {
+      const r = await api.post<{ counts: { chapters: number } }>(
+        `/api/projects/${project!.id}/apply-volume-chapters`,
+        {
+          volumeId: exVolumeId || undefined,
+          volumeTitle: exPlan.volumeTitle,
+          volumeSummary: exPlan.volumeSummary,
+          chapters: exPlan.chapters,
+        },
+      );
+      setExPlan(null);
+      await useNovel.getState().selectProject(project!.id);
+      setError(`已写入 ${r.counts.chapters} 章到「${exPlan.volumeTitle}」`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExBusy(false);
     }
   }
 
@@ -450,6 +531,102 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
                     .join('、')}
                 </div>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 按卷扩展 ── */}
+      {tab === 'toc' && (
+        <div className="settings-section" style={{ marginTop: 12 }}>
+          <h3 style={{ fontSize: 13, margin: '0 0 4px' }}>按卷扩展（扩到千章就用这个）</h3>
+          <p className="hint" style={{ marginTop: 0 }}>
+            已有 {chapters.length} 章
+            {chapters.length < 1000
+              ? `，按每卷 ${Number(exCount) || 50} 章算，还差约 ${Math.ceil(
+                  (1000 - chapters.length) / (Number(exCount) || 50),
+                )} 卷`
+              : '，已满 1000 章'}
+            。每卷生成完立即写入，某卷失败只影响那一卷，不用从头再来。
+          </p>
+
+          <div className="row">
+            <div className="field" style={{ flex: 1 }}>
+              <label>目标卷</label>
+              <select value={exVolumeId} onChange={(e) => setExVolumeId(e.target.value)}>
+                <option value="">＋ 新建一卷</option>
+                {volumes.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.title}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field" style={{ flex: 2 }}>
+              <label>{exVolumeId ? '卷名（取所选卷）' : '新卷卷名'}</label>
+              <input
+                value={exVolumeTitle}
+                onChange={(e) => setExVolumeTitle(e.target.value)}
+                placeholder={exVolumeId ? '' : '如：第三卷 · 商战风云（留空自动起名）'}
+                disabled={Boolean(exVolumeId)}
+              />
+            </div>
+            <div className="field">
+              <label>本卷章数</label>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                value={exCount}
+                onChange={(e) => setExCount(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="field">
+            <label>本卷额外要求（可空）</label>
+            <input
+              value={exInstruction}
+              onChange={(e) => setExInstruction(e.target.value)}
+              placeholder="如：这一卷主线是夺回产业，结尾留一个反杀钩子"
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+            <button className="primary" onClick={() => void genVolume()} disabled={exBusy}>
+              {exBusy && !exPlan ? '生成中…' : '生成本卷章节'}
+            </button>
+            {exPlan && (
+              <>
+                <span className="hint" style={{ margin: 0 }}>
+                  {exPlan.volumeTitle} · {exPlan.chapters.length} 章
+                </span>
+                <button onClick={() => void applyVolume()} disabled={exBusy}>
+                  写入本卷
+                </button>
+              </>
+            )}
+          </div>
+
+          {exBusy && (
+            <div className="empty" style={{ padding: '6px 0' }}>
+              {exJob
+                ? `正在生成本卷：已完成 ${exJob.done}/${exJob.total} 批`
+                : '已提交后台任务，等待开始…'}
+            </div>
+          )}
+
+          {exPlan && (
+            <div className="draft-outline" style={{ maxHeight: 260 }}>
+              <div className="draft-volume">
+                {exPlan.volumeTitle}（第 {chapters.length + 1}–{chapters.length + exPlan.chapters.length}{' '}
+                章）
+              </div>
+              {exPlan.chapters.map((c, i) => (
+                <div className="draft-chapter" key={`${c.title}-${i}`}>
+                  <div className="draft-chapter-title">{c.title}</div>
+                  <div className="summary">{c.outline}</div>
+                </div>
+              ))}
             </div>
           )}
         </div>

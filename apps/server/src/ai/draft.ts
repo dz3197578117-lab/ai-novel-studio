@@ -414,6 +414,105 @@ export function renumberChapterTitle(title: string, index: number): string {
   return stripped ? `第${n}章 · ${stripped}` : `第${n}章`;
 }
 
+// ───────────────────────── 按卷生成章节 ─────────────────────────
+
+/** 构造「只生成某一卷章节」的提示词。用于按卷把书扩到上千章 */
+export function buildVolumeChaptersPrompt(input: {
+  projectTitle: string;
+  logline: string;
+  genre: string;
+  styleGuide: string;
+  volumeTitle: string;
+  volumeSummary: string;
+  idea: string;
+  startNumber: number;
+  count: number;
+  existingTitles: string[];
+  instruction?: string;
+}): { system: string; user: string } {
+  const {
+    projectTitle,
+    logline,
+    genre,
+    styleGuide,
+    volumeTitle,
+    volumeSummary,
+    idea,
+    startNumber,
+    count,
+    existingTitles,
+    instruction,
+  } = input;
+
+  const endNumber = startNumber + count - 1;
+
+  const system = `你是长篇小说结构编辑，正在为一卷写章节规划。
+
+只输出一个 JSON 对象，不要解释，不要 markdown 代码块：
+{"chapters":[{"title":"第N章 · 标题","outline":"本章 60-120 字大纲：谁、做了什么、冲突、结果、留下什么钩子"}]}
+
+硬性要求：
+- 章节编号必须从第 ${startNumber} 章连续排到第 ${endNumber} 章，共 ${count} 章
+- 标题格式统一为「第N章 · 四到八字标题」
+- 每章大纲要具体到事件，不要写「推动剧情」这种空话
+- 卷首章要承接上一卷结尾，卷末章要有明确的小高潮或转折
+- 不要与本作品已有章节重复
+
+作品：《${projectTitle}》｜题材：${genre || '未定'}｜文风：${styleGuide || '自然流畅'}
+${logline ? `简介：${logline}` : ''}`;
+
+  const user = `## 本卷
+卷名：${volumeTitle}
+本卷概要：${volumeSummary || '（未提供，请根据全书与卷名合理设计）'}
+
+## 全书设定
+${idea || '（无额外设定）'}
+
+## 已有章节（不要重复）
+${existingTitles.length ? existingTitles.slice(-40).join('、') : '（无）'}
+
+${instruction ? `## 额外要求\n${instruction}\n` : ''}
+请写出第 ${startNumber} 章到第 ${endNumber} 章的规划。`;
+
+  return { system, user };
+}
+
+/** 解析按卷生成的章节；容忍代码块与截断 */
+export function parseVolumeChapters(raw: string): { title: string; outline: string }[] {
+  const text = String(raw ?? '')
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  const start = text.indexOf('{');
+  if (start < 0) throw new AiError('模型没有返回可解析的章节目录，请重试。');
+  const end = text.lastIndexOf('}');
+  const candidate = end > start ? text.slice(start, end + 1) : text.slice(start);
+
+  let json: unknown = null;
+  try {
+    json = JSON.parse(candidate);
+  } catch {
+    json = repairTruncatedJson(raw);
+  }
+  if (!json || typeof json !== 'object') {
+    throw new AiError('模型返回的章节目录格式有误，请重试。');
+  }
+
+  const arr = (json as Record<string, unknown>).chapters;
+  if (!Array.isArray(arr) || arr.length === 0) {
+    throw new AiError('模型没有给出章节，请重试。');
+  }
+
+  return arr.slice(0, 200).map((c) => {
+    const r = c as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+    return {
+      title: str(r.title) || '未命名章节',
+      outline: str(r.outline),
+    };
+  });
+}
+
 // ───────────────────────── 单章大纲重生 ─────────────────────────
 
 /** 构造「只重做某一章」的提示词，带上前后章节保证衔接 */

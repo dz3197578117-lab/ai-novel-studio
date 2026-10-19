@@ -15,10 +15,12 @@ import {
   buildChapterRegenPrompt,
   buildDraftPrompt,
   buildSkeletonPrompt,
+  buildVolumeChaptersPrompt,
   parseChapterBatch,
   parseDraft,
   parseRegeneratedChapter,
   parseSkeleton,
+  parseVolumeChapters,
   renumberChapterTitle,
   volumeCountFor,
 } from '../ai/draft.js';
@@ -27,7 +29,7 @@ import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/cl
 import { createJob, getJob, patchJob, runJob } from '../services/jobs.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
-import { createChapter, createVolume, listChapters } from '../repos/chapters.repo.js';
+import { createChapter, createVolume, listChapters, listVolumes } from '../repos/chapters.repo.js';
 import {
   draftRequestSchema,
   interviewRequest,
@@ -35,6 +37,8 @@ import {
   chapterRegenRequest,
   tocApply,
   tocRequest,
+  expandVolumeRequest,
+  applyVolumeChapters,
 } from './schemas.js';
 
 /** 单次调用的超时时间（含重试等待） */
@@ -399,6 +403,165 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       message: `已在后台生成，共 ${batchTotal} 批；可查看进度`,
     });
   });
+
+  /**
+   * 按卷扩展：只生成「某一卷」的章节，一卷一卷地把书扩到上千章。
+   * 和整本生成一样走后台任务 + 轮询，避免长请求被掐断。
+   */
+  app.post<{ Params: { id: string } }>('/api/projects/:id/expand-volume', async (req, reply) => {
+    const project = getProject(req.params.id);
+    if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+    const parsed = expandVolumeRequest.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '参数校验失败',
+        details: parsed.error.flatten(),
+      });
+    }
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    const existing = listChapters(project.id);
+    const volumes = listVolumes(project.id);
+    const targetVolume = parsed.data.volumeId
+      ? volumes.find((v) => v.id === parsed.data.volumeId)
+      : null;
+    const volumeTitle =
+      targetVolume?.title?.replace(/\s+/g, ' ').trim() ||
+      parsed.data.volumeTitle?.trim() ||
+      `第${volumes.length + 1}卷`;
+    const volumeSummary = targetVolume?.summary ?? '';
+
+    const count = Math.max(1, Math.min(300, parsed.data.chapterCount ?? 50));
+    const startNumber = existing.length + 1;
+    const batchTotal = Math.ceil(count / CHAPTER_BATCH_SIZE);
+
+    const idea = [
+      `书名：${project.title}`,
+      project.logline ? `简介：${project.logline}` : '',
+      project.genre ? `题材：${project.genre}` : '',
+      project.brainstorm ? `作者想法：${project.brainstorm.slice(0, 1500)}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const job = createJob<
+      { volumeTitle: string; volumeSummary: string; chapters: { title: string; outline: string }[] }
+    >('volume', {
+      phase: 'chapters',
+      done: 0,
+      total: batchTotal,
+      note: `${volumeTitle} · 第 ${startNumber} 章起，共 ${count} 章`,
+    });
+
+    runJob(job, async () => {
+      const chapters: { title: string; outline: string }[] = [];
+      for (let batch = 0; batch < batchTotal; batch++) {
+        const batchStart = startNumber + batch * CHAPTER_BATCH_SIZE;
+        const batchCount = Math.min(CHAPTER_BATCH_SIZE, count - batch * CHAPTER_BATCH_SIZE);
+
+        const prompt = buildVolumeChaptersPrompt({
+          projectTitle: project.title,
+          logline: project.logline,
+          genre: project.genre,
+          styleGuide: project.styleGuide,
+          volumeTitle,
+          volumeSummary,
+          idea,
+          startNumber: batchStart,
+          count: batchCount,
+          existingTitles: [...existing.map((c) => c.title), ...chapters.map((c) => c.title)],
+          instruction: parsed.data.instruction,
+        });
+
+        const content = await completeAccumulated(
+          config,
+          [
+            { role: 'system', content: prompt.system },
+            { role: 'user', content: prompt.user },
+          ],
+          { maxTokens: draftBudget(config), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
+        );
+
+        const got = parseVolumeChapters(content).slice(0, batchCount);
+        got.forEach((c, i) =>
+          chapters.push({
+            // 模型可能每批从「第1章」重数，这里统一成全书连续编号
+            title: renumberChapterTitle(c.title, batchStart - 1 + i),
+            outline: c.outline,
+          }),
+        );
+
+        patchJob(job.id, {
+          progress: { done: batch + 1, total: batchTotal, phase: 'chapters' },
+        });
+        if (batch + 1 < batchTotal) await sleep(BATCH_DELAY_MS);
+      }
+      return { volumeTitle, volumeSummary, chapters };
+    });
+
+    return reply.code(202).send({
+      jobId: job.id,
+      volumeTitle,
+      startNumber,
+      chapterCount: count,
+      batches: batchTotal,
+    });
+  });
+
+  /** 把某卷生成的章节写入作品（追加到该卷末尾） */
+  app.post<{ Params: { id: string } }>(
+    '/api/projects/:id/apply-volume-chapters',
+    async (req, reply) => {
+      const project = getProject(req.params.id);
+      if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+      const parsed = applyVolumeChapters.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: 'invalid_input',
+          message: '章节数据不完整，无法写入',
+          details: parsed.error.flatten(),
+        });
+      }
+
+      const volumes = listVolumes(project.id);
+      let volumeId = parsed.data.volumeId ?? null;
+      // 指定了已存在的卷就用它，否则新建
+      if (!volumeId || !volumes.some((v) => v.id === volumeId)) {
+        const created = createVolume(
+          project.id,
+          parsed.data.volumeTitle,
+          parsed.data.volumeSummary ?? '',
+        );
+        volumeId = created.id;
+      }
+
+      for (const c of parsed.data.chapters) {
+        createChapter(project.id, {
+          title: c.title,
+          volumeId,
+          outline: c.outline ?? '',
+          content: '',
+          status: 'outline',
+        });
+      }
+
+      return reply.code(201).send({
+        counts: { volumeId, chapters: parsed.data.chapters.length },
+      });
+    },
+  );
 
   /** 查询后台任务进度 / 结果 */
   app.get<{ Params: { id: string } }>('/api/jobs/:id', async (req, reply) => {

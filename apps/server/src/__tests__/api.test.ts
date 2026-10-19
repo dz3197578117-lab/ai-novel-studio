@@ -596,6 +596,86 @@ describe('AI 生成目录（已有作品）', () => {
   });
 });
 
+describe('按卷扩展到千章', () => {
+  let projectId = '';
+
+  before(async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '按卷测试' })).body);
+    projectId = p.id;
+    await post(`/api/projects/${projectId}/chapters`, { title: '第1章 · 起点' });
+  });
+
+  test('未配置模型时按卷生成返回 412', async () => {
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '按卷无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+    const res = await post(`/api/projects/${projectId}/expand-volume`, { chapterCount: 20 });
+    assert.equal(res.statusCode, 412);
+  });
+
+  test('写入某卷章节时自动新建卷并挂到该卷下', async () => {
+    const res = await post(`/api/projects/${projectId}/apply-volume-chapters`, {
+      volumeTitle: '第二卷 · 扩张',
+      volumeSummary: '扩到千章的第二卷',
+      chapters: [
+        { title: '第2章 · 第二卷开场', outline: '开场' },
+        { title: '第3章 · 第二卷推进', outline: '推进' },
+      ],
+    });
+    assert.equal(res.statusCode, 201);
+    const body = JSON.parse(res.body) as { counts: { volumeId: string; chapters: number } };
+    assert.equal(body.counts.chapters, 2);
+
+    const volumes = JSON.parse((await get(`/api/projects/${projectId}/volumes`)).body) as {
+      id: string;
+      title: string;
+    }[];
+    assert.equal(volumes.length, 1);
+    assert.equal(volumes[0]!.title, '第二卷 · 扩张');
+    assert.equal(volumes[0]!.id, body.counts.volumeId);
+
+    const chapters = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      volumeId: string | null;
+    }[];
+    assert.equal(chapters.length, 3);
+    assert.equal(chapters.filter((c) => c.volumeId === body.counts.volumeId).length, 2);
+  });
+
+  test('指定已有卷时追加到该卷', async () => {
+    const volumes = JSON.parse((await get(`/api/projects/${projectId}/volumes`)).body) as {
+      id: string;
+    }[];
+    const res = await post(`/api/projects/${projectId}/apply-volume-chapters`, {
+      volumeId: volumes[0]!.id,
+      volumeTitle: '忽略此名',
+      chapters: [{ title: '第4章 · 同卷追加', outline: '' }],
+    });
+    assert.equal(res.statusCode, 201);
+    const after = JSON.parse((await get(`/api/projects/${projectId}/volumes`)).body) as unknown[];
+    assert.equal(after.length, 1, '不应重复建卷');
+    const chapters = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      volumeId: string | null;
+    }[];
+    assert.equal(chapters.filter((c) => c.volumeId === volumes[0]!.id).length, 3);
+  });
+
+  test('空章节列表拒绝写入', async () => {
+    const res = await post(`/api/projects/${projectId}/apply-volume-chapters`, {
+      volumeTitle: '空卷',
+      chapters: [],
+    });
+    assert.equal(res.statusCode, 400);
+  });
+});
+
 describe('分层创作与知识库', () => {
   let projectId = '';
   let chapterId = '';

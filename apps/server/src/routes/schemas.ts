@@ -152,6 +152,30 @@ export const tocApply = z.object({
     .max(1000),
 });
 
+/** 按卷扩展：只生成某一卷的章节 */
+export const expandVolumeRequest = z.object({
+  volumeId: z.string().optional(),
+  volumeTitle: z.string().max(200).optional(),
+  chapterCount: z.number().int().min(1).max(300).optional(),
+  instruction: z.string().max(2000).optional(),
+});
+
+/** 把某卷的章节写入作品 */
+export const applyVolumeChapters = z.object({
+  volumeId: z.string().optional(),
+  volumeTitle: z.string().min(1).max(200),
+  volumeSummary: z.string().max(4000).optional(),
+  chapters: z
+    .array(
+      z.object({
+        title: z.string().min(1).max(200),
+        outline: z.string().max(20_000).optional(),
+      }),
+    )
+    .min(1, '至少需要一章')
+    .max(300),
+});
+
 /** 一套模型配置 */
 export const profileInput = z.object({
   name: z.string().min(1, '给这套配置起个名字').max(60),
