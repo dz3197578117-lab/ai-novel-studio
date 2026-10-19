@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+
+# 本地数据（数据库 / 用户上传 / 生成的图片 / API Key 配置）
+data/
+apps/server/data/
+apps/web/dist/
+
+# 本地环境变量
+.env
+.env.local

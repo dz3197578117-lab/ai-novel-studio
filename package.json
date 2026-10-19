@@ -1,0 +1,27 @@
+{
+  "name": "novelforge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 长篇小说创作工作台 —— 本地 Web 应用",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "pnpm --filter @novelforge/server dev",
+    "dev:web": "pnpm --filter @novelforge/web dev",
+    "build": "pnpm --filter @novelforge/web build",
+    "start": "pnpm --filter @novelforge/server start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @novelforge/server test",
+    "test:e2e": "node scripts/e2e.mjs",
+    "test:e2e:write": "node scripts/e2e-write.mjs",
+    "mock:llm": "node scripts/mock-llm.mjs",
+    "seed": "pnpm --filter @novelforge/server seed",
+    "clean": "node scripts/clean.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
