@@ -89,6 +89,58 @@ describe('项目 CRUD', () => {
   });
 });
 
+describe('作品库概览', () => {
+  test('返回统计字段且新作品计数为 0', async () => {
+    const created = JSON.parse((await post('/api/projects', { title: '概览测试' })).body);
+    const res = await get('/api/projects/overview');
+    assert.equal(res.statusCode, 200);
+    const list = JSON.parse(res.body) as {
+      id: string;
+      title: string;
+      chapterCount: number;
+      wordCount: number;
+      entityCount: number;
+      coverUrl: string | null;
+    }[];
+    const item = list.find((p) => p.id === created.id);
+    assert.ok(item, '新作品应出现在概览中');
+    assert.equal(item.chapterCount, 0);
+    assert.equal(item.wordCount, 0);
+    assert.equal(item.entityCount, 0);
+    assert.equal(item.coverUrl, null);
+  });
+
+  test('统计随章节与设定更新', async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '统计测试' })).body);
+    const c = JSON.parse((await post(`/api/projects/${p.id}/chapters`, { title: '第一章' })).body);
+    await patch(`/api/chapters/${c.id}`, { content: '雪落了三日' });
+    await post(`/api/projects/${p.id}/entities`, { type: 'character', name: '甲' });
+
+    const list = JSON.parse((await get('/api/projects/overview')).body) as {
+      id: string;
+      chapterCount: number;
+      wordCount: number;
+      entityCount: number;
+    }[];
+    const item = list.find((x) => x.id === p.id)!;
+    assert.equal(item.chapterCount, 1);
+    assert.equal(item.wordCount, 5);
+    assert.equal(item.entityCount, 1);
+  });
+
+  test('概览按更新时间倒序，最新在前', async () => {
+    const list = JSON.parse((await get('/api/projects/overview')).body) as {
+      updatedAt: string;
+    }[];
+    for (let i = 1; i < list.length; i++) {
+      assert.ok(
+        list[i - 1]!.updatedAt >= list[i]!.updatedAt,
+        '概览结果应按 updatedAt 倒序',
+      );
+    }
+  });
+});
+
 describe('设定库', () => {
   let projectId = '';
   let entityId = '';

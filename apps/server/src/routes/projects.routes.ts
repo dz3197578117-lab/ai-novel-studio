@@ -4,12 +4,16 @@ import {
   deleteProject,
   getProject,
   listProjects,
+  listProjectsOverview,
   updateProject,
 } from '../repos/projects.repo.js';
 import { projectInput } from './schemas.js';
 
 export async function projectRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/projects', async () => listProjects());
+
+  /** 作品库：带统计信息，供「小说管理」使用。必须放在 /:id 之前 */
+  app.get('/api/projects/overview', async () => listProjectsOverview());
 
   app.get<{ Params: { id: string } }>('/api/projects/:id', async (req, reply) => {
     const p = getProject(req.params.id);

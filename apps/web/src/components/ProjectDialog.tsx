@@ -9,10 +9,13 @@ export function ProjectDialog({
   open,
   onClose,
   project,
+  onSaved,
 }: {
   open: boolean;
   onClose: () => void;
   project?: Project | null;
+  /** 保存成功后回调，作品库用它刷新列表 */
+  onSaved?: () => void | Promise<void>;
 }) {
   const [title, setTitle] = useState('');
   const [logline, setLogline] = useState('');
@@ -44,6 +47,7 @@ export function ProjectDialog({
         await loadProjects();
         await selectProject(created.id);
       }
+      await onSaved?.();
       onClose();
     } finally {
       setBusy(false);

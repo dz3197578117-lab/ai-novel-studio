@@ -16,6 +16,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @novelforge/server test",
     "test:e2e": "node scripts/e2e.mjs",
+    "test:e2e:library": "node scripts/e2e-library.mjs",
     "test:e2e:write": "node scripts/e2e-write.mjs",
     "test:scroll": "node scripts/diagnose-scroll.mjs",
     "push": "node scripts/push.mjs",

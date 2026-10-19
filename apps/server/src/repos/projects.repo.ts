@@ -1,4 +1,4 @@
-import type { Project, ProjectStatus, ID } from '@novelforge/shared';
+import type { Project, ProjectOverview, ProjectStatus, ID } from '@novelforge/shared';
 import { getDb, newId, nowIso } from '../db.js';
 
 interface ProjectRow {
@@ -39,6 +39,39 @@ export function getProject(id: ID): Project | null {
     | ProjectRow
     | undefined;
   return row ? toProject(row) : null;
+}
+
+/**
+ * 作品库列表：一次查询带出章节数、总字数、设定数与封面，
+ * 避免前端为每个作品再发 N 个请求。
+ */
+export function listProjectsOverview(): ProjectOverview[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT
+         p.*,
+         (SELECT COUNT(*) FROM chapters c WHERE c.project_id = p.id) AS chapter_count,
+         (SELECT COALESCE(SUM(c.word_count), 0) FROM chapters c WHERE c.project_id = p.id) AS word_count,
+         (SELECT COUNT(*) FROM entities e WHERE e.project_id = p.id) AS entity_count,
+         (SELECT i.url FROM images i WHERE i.project_id = p.id AND i.kind = 'cover'
+            ORDER BY i.created_at DESC LIMIT 1) AS cover_url
+       FROM projects p
+       ORDER BY p.updated_at DESC`,
+    )
+    .all() as unknown as (ProjectRow & {
+    chapter_count: number;
+    word_count: number;
+    entity_count: number;
+    cover_url: string | null;
+  })[];
+
+  return rows.map((r) => ({
+    ...toProject(r),
+    chapterCount: r.chapter_count,
+    wordCount: r.word_count,
+    entityCount: r.entity_count,
+    coverUrl: r.cover_url,
+  }));
 }
 
 export interface ProjectInput {

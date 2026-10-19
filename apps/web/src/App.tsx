@@ -8,8 +8,9 @@ import { EntityManager } from './components/EntityManager';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ExportDialog } from './components/ExportDialog';
 import { ImageDialog } from './components/ImageDialog';
+import { ProjectLibrary } from './components/ProjectLibrary';
 
-type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | null;
+type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | 'library' | null;
 
 export function App() {
   const project = useNovel((s) => s.project);
@@ -57,6 +58,7 @@ export function App() {
       <SettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} />
       <ExportDialog open={dialog === 'export'} onClose={() => setDialog(null)} />
       <ImageDialog open={dialog === 'image'} onClose={() => setDialog(null)} />
+      <ProjectLibrary open={dialog === 'library'} onClose={() => setDialog(null)} />
 
       {error && <div className="toast">{error}</div>}
     </div>
@@ -81,6 +83,9 @@ function TopBar({
         flexShrink: 0,
       }}
     >
+      <button className="ghost" onClick={() => onOpen('library')}>
+        📖 作品库
+      </button>
       <button className="ghost" onClick={() => onOpen('entities')} disabled={!hasProject}>
         📚 设定库
       </button>

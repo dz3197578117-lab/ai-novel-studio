@@ -42,6 +42,15 @@ export interface Project extends Timestamped {
   styleGuide: string;
 }
 
+/** 作品库列表项：附统计信息，供「小说管理」视图使用 */
+export interface ProjectOverview extends Project {
+  chapterCount: number;
+  wordCount: number;
+  entityCount: number;
+  /** 最近生成的封面图地址；没有则为 null */
+  coverUrl: string | null;
+}
+
 // ─────────────────────────── 设定库 ───────────────────────────
 
 export type EntityType = 'world' | 'character' | 'faction' | 'term' | 'item' | 'location';
