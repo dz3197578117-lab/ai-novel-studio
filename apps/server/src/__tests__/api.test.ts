@@ -596,6 +596,82 @@ describe('AI 生成目录（已有作品）', () => {
   });
 });
 
+describe('章节批量操作', () => {
+  let projectId = '';
+  let volumeId = '';
+
+  before(async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '批量操作测试' })).body);
+    projectId = p.id;
+    const v = JSON.parse((await post(`/api/projects/${projectId}/volumes`, { title: '第一卷' })).body);
+    volumeId = v.id;
+    for (let i = 1; i <= 5; i++) {
+      await post(`/api/projects/${projectId}/chapters`, { title: `第${i}章` });
+    }
+  });
+
+  test('批量移动章节到某卷', async () => {
+    const list = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      id: string;
+    }[];
+    const ids = list.slice(0, 3).map((c) => c.id);
+
+    const res = await post(`/api/projects/${projectId}/chapters/batch-move`, {
+      ids,
+      volumeId,
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).moved, 3);
+
+    const after = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      volumeId: string | null;
+    }[];
+    assert.equal(after.filter((c) => c.volumeId === volumeId).length, 3);
+  });
+
+  test('批量把章节移出卷', async () => {
+    const list = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      id: string;
+      volumeId: string | null;
+    }[];
+    const ids = list.filter((c) => c.volumeId === volumeId).map((c) => c.id);
+
+    const res = await post(`/api/projects/${projectId}/chapters/batch-move`, {
+      ids,
+      volumeId: null,
+    });
+    assert.equal(res.statusCode, 200);
+    const after = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      volumeId: string | null;
+    }[];
+    assert.equal(after.filter((c) => c.volumeId === null).length, 5);
+  });
+
+  test('批量删除只影响选中的章节', async () => {
+    const list = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body) as {
+      id: string;
+    }[];
+    const ids = list.slice(0, 2).map((c) => c.id);
+    const res = await post(`/api/projects/${projectId}/chapters/batch-delete`, { ids });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).deleted, 2);
+    const after = JSON.parse((await get(`/api/projects/${projectId}/chapters`)).body);
+    assert.equal(after.length, 3);
+  });
+
+  test('空选择被拒绝', async () => {
+    const r1 = await post(`/api/projects/${projectId}/chapters/batch-delete`, { ids: [] });
+    assert.equal(r1.statusCode, 400);
+    const r2 = await post(`/api/projects/${projectId}/chapters/batch-move`, { ids: [] });
+    assert.equal(r2.statusCode, 400);
+  });
+
+  test('不存在项目的批量操作返回 404', async () => {
+    const res = await post('/api/projects/nope/chapters/batch-delete', { ids: ['x'] });
+    assert.equal(res.statusCode, 404);
+  });
+});
+
 describe('按卷扩展到千章', () => {
   let projectId = '';
 

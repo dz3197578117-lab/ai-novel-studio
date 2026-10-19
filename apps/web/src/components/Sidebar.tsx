@@ -29,11 +29,37 @@ export function Sidebar({
   const [addingChapter, setAddingChapter] = useState(false);
   const [renaming, setRenaming] = useState<RenameTarget>(null);
   const [renameValue, setRenameValue] = useState('');
+  /** 多选批量操作（千章规模下逐条删太痛苦） */
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState('');
+  const [moveTarget, setMoveTarget] = useState('');
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const exitSelect = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
+  /** 过滤后的章节（按标题 / 大纲关键字） */
+  const visible = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return chapters;
+    return chapters.filter((c) => c.title.toLowerCase().includes(q));
+  }, [chapters, filter]);
 
   const grouped = useMemo(() => {
     const byVolume = new Map<string, ChapterSummary[]>();
     const orphan: ChapterSummary[] = [];
-    for (const c of chapters) {
+    for (const c of visible) {
       if (c.volumeId) {
         const arr = byVolume.get(c.volumeId) ?? [];
         arr.push(c);
@@ -43,7 +69,53 @@ export function Sidebar({
       }
     }
     return { byVolume, orphan };
-  }, [chapters]);
+  }, [visible]);
+
+  async function batchDelete() {
+    if (!project || selected.size === 0) return;
+    const words = chapters
+      .filter((c) => selected.has(c.id))
+      .reduce((s, c) => s + c.wordCount, 0);
+    const ok = confirm(
+      `确定删除选中的 ${selected.size} 个章节？\n\n` +
+        (words > 0 ? `共 ${words} 字正文，` : '') +
+        '删除后可在 data/backups/deleted-*.json 中找回。',
+    );
+    if (!ok) return;
+    const ids = [...selected];
+    try {
+      const r = await api.post<{ deleted: number }>(
+        `/api/projects/${project.id}/chapters/batch-delete`,
+        { ids },
+      );
+      // 当前章节被删了就清空编辑区
+      if (currentChapter && ids.includes(currentChapter.id)) clearChapter();
+      exitSelect();
+      await refresh();
+      const rest = useNovel.getState().chapters;
+      if (!useNovel.getState().currentChapter && rest.length > 0) {
+        await loadChapter(rest[0]!.id);
+      }
+      setError(`已删除 ${r.deleted} 个章节`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function batchMove() {
+    if (!project || selected.size === 0) return;
+    try {
+      const r = await api.post<{ moved: number }>(
+        `/api/projects/${project.id}/chapters/batch-move`,
+        { ids: [...selected], volumeId: moveTarget || null },
+      );
+      exitSelect();
+      await refresh();
+      setError(`已移动 ${r.moved} 个章节`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   /**
    * 用「已有最大序号 + 1」而不是「章节数 + 1」，
@@ -198,6 +270,15 @@ export function Sidebar({
         <div className="section-title">
           <span>目录</span>
           <span style={{ display: 'flex', gap: 2 }}>
+            {chapters.length > 0 && (
+              <button
+                className={`ghost${selectMode ? ' on' : ''}`}
+                onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}
+                title="多选：批量删除 / 移动章节"
+              >
+                多选
+              </button>
+            )}
             <button className="ghost" onClick={addVolume} disabled={!project} title="新建卷">
               卷＋
             </button>
@@ -212,8 +293,63 @@ export function Sidebar({
           </span>
         </div>
 
+        {chapters.length > 8 && (
+          <input
+            className="rename-input"
+            style={{ marginBottom: 6 }}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="搜索章节标题…"
+          />
+        )}
+
+        {selectMode && (
+          <div className="batch-bar">
+            <div className="batch-info">
+              已选 {selected.size} / {visible.length}
+              <button
+                className="link-btn"
+                onClick={() =>
+                  setSelected((prev) => {
+                    if (prev.size === visible.length) return new Set();
+                    return new Set(visible.map((c) => c.id));
+                  })
+                }
+              >
+                {selected.size === visible.length ? '取消全选' : '全选'}
+              </button>
+            </div>
+            <select value={moveTarget} onChange={(e) => setMoveTarget(e.target.value)}>
+              <option value="">移到…（不选=移出卷）</option>
+              {volumes.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.title}
+                </option>
+              ))}
+            </select>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button
+                style={{ padding: '3px 8px', fontSize: 11 }}
+                disabled={selected.size === 0}
+                onClick={() => void batchMove()}
+              >
+                移动
+              </button>
+              <button
+                className="danger"
+                style={{ padding: '3px 8px', fontSize: 11 }}
+                disabled={selected.size === 0}
+                onClick={() => void batchDelete()}
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        )}
+
         {volumes.map((v) => {
           const list = grouped.byVolume.get(v.id) ?? [];
+          if (filter && list.length === 0) return null;
           const isRenamingVolume = renaming?.kind === 'volume' && renaming.id === v.id;
           return (
             <div key={v.id} className="volume-block">
@@ -262,6 +398,9 @@ export function Sidebar({
                   key={c.id}
                   chapter={c}
                   active={currentChapter?.id === c.id}
+                  selectMode={selectMode}
+                  checked={selected.has(c.id)}
+                  onToggle={() => toggleSelect(c.id)}
                   renaming={renaming?.kind === 'chapter' && renaming.id === c.id}
                   renameValue={renameValue}
                   onRenameChange={setRenameValue}
@@ -289,6 +428,9 @@ export function Sidebar({
             key={c.id}
             chapter={c}
             active={currentChapter?.id === c.id}
+            selectMode={selectMode}
+            checked={selected.has(c.id)}
+            onToggle={() => toggleSelect(c.id)}
             renaming={renaming?.kind === 'chapter' && renaming.id === c.id}
             renameValue={renameValue}
             onRenameChange={setRenameValue}
@@ -299,6 +441,10 @@ export function Sidebar({
             onDelete={() => void removeChapter(c)}
           />
         ))}
+
+        {chapters.length > 0 && visible.length === 0 && (
+          <div className="empty">没有匹配「{filter}」的章节</div>
+        )}
 
         {chapters.length === 0 && (
           <div className="empty">
@@ -315,6 +461,9 @@ export function Sidebar({
 function ChapterRow({
   chapter,
   active,
+  selectMode,
+  checked,
+  onToggle,
   renaming,
   renameValue,
   onRenameChange,
@@ -326,6 +475,9 @@ function ChapterRow({
 }: {
   chapter: ChapterSummary;
   active: boolean;
+  selectMode: boolean;
+  checked: boolean;
+  onToggle: () => void;
   renaming: boolean;
   renameValue: string;
   onRenameChange: (v: string) => void;
@@ -356,23 +508,34 @@ function ChapterRow({
 
   return (
     <div
-      className={`chapter-item${active ? ' active' : ''}`}
-      onClick={onClick}
+      className={`chapter-item${active ? ' active' : ''}${checked ? ' checked' : ''}`}
+      onClick={() => (selectMode ? onToggle() : onClick())}
       onDoubleClick={(e) => {
         e.stopPropagation();
-        onStartRename();
+        if (!selectMode) onStartRename();
       }}
-      title="双击重命名"
+      title={selectMode ? '点击勾选' : '双击重命名'}
     >
+      {selectMode && (
+        <input
+          type="checkbox"
+          className="chapter-check"
+          checked={checked}
+          onChange={onToggle}
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
       <span className="chapter-name">{chapter.title}</span>
-      <span className="row-actions" onClick={(e) => e.stopPropagation()}>
-        <button className="icon-btn" title="重命名" onClick={onStartRename}>
-          ✎
-        </button>
-        <button className="icon-btn danger" title="删除章节" onClick={onDelete}>
-          ×
-        </button>
-      </span>
+      {!selectMode && (
+        <span className="row-actions" onClick={(e) => e.stopPropagation()}>
+          <button className="icon-btn" title="重命名" onClick={onStartRename}>
+            ✎
+          </button>
+          <button className="icon-btn danger" title="删除章节" onClick={onDelete}>
+            ×
+          </button>
+        </span>
+      )}
       <span className="wc">{chapter.wordCount > 0 ? chapter.wordCount : '·'}</span>
     </div>
   );
