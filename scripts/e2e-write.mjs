@@ -110,6 +110,14 @@ async function main() {
 
     check('页面已加载', (await evaluate('document.getElementById("root").innerHTML.length')) > 500);
 
+    // 首页是书架，先点第一本进入写作台
+    await evaluate(`(() => {
+      const card = document.querySelector('.shelf .lib-card');
+      if (card) card.click();
+      return !!card;
+    })()`);
+    await sleep(2200);
+
     // 2. 选中一个有正文的章节（第一章）
     await evaluate(`(() => {
       const items = Array.from(document.querySelectorAll('.chapter-item'));

@@ -127,8 +127,28 @@ async function main() {
     const rootHtmlLen = await cdp.eval('document.getElementById("root").innerHTML.length');
     check('React 已挂载', rootHtmlLen > 500, `root innerHTML ${rootHtmlLen} 字符`);
 
-    // 2. 品牌与目录渲染
-    const brand = await cdp.eval('document.querySelector(".brand")?.textContent ?? ""');
+    // 2. 首页是书架，不是编辑器
+    const shelfVisible = await cdp.eval('!!document.querySelector(".shelf")');
+    check('首页显示书架', shelfVisible === true);
+    const shelfCards = await cdp.eval('document.querySelectorAll(".shelf .lib-card").length');
+    check('书架上有作品卡片', shelfCards >= 1, `${shelfCards} 本`);
+    const editorOnShelf = await cdp.eval('!!document.querySelector(".editor-body")');
+    check('书架上不显示编辑器', editorOnShelf === false);
+
+    // 3. 点书进入写作台
+    const entered = await cdp.eval(`(() => {
+      const card = document.querySelector('.shelf .lib-card');
+      if (!card) return false;
+      card.click();
+      return true;
+    })()`);
+    check('点击作品进入写作台', entered);
+    await sleep(2200);
+    const inWorkspace = await cdp.eval('!!document.querySelector(".editor-body")');
+    check('写作台已打开', inWorkspace === true);
+
+    // 4. 品牌与目录渲染
+    const brand = await cdp.eval('document.querySelector(".sidebar .brand")?.textContent ?? ""');
     check('侧边栏品牌渲染', brand.includes('NovelForge'), brand.trim());
 
     const projectOptions = await cdp.eval(
@@ -196,15 +216,24 @@ async function main() {
     // 8. 页面无 JS 异常
     check('无控制台错误', errors.length === 0, errors.slice(0, 3).join(' | '));
 
-    // 截图存档
-    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
-    fs.writeFileSync(path.resolve('e2e-main.png'), Buffer.from(shot.data, 'base64'));
-
-    // 关掉弹窗再截一张纯净的
+    // 关掉弹窗，再测「返回书架」
     await cdp.eval('document.querySelector(".modal-backdrop")?.dispatchEvent(new MouseEvent("mousedown",{bubbles:true}))');
     await sleep(500);
-    const shot2 = await cdp.send('Page.captureScreenshot', { format: 'png' });
-    fs.writeFileSync(path.resolve('e2e-editor.png'), Buffer.from(shot2.data, 'base64'));
+
+    const backBtn = await cdp.eval(`(() => {
+      const b = Array.from(document.querySelectorAll('button')).find(x => x.textContent.includes('书架'));
+      if (b) { b.click(); return true; }
+      return false;
+    })()`);
+    check('点击「← 书架」', backBtn);
+    await sleep(1200);
+    const backOnShelf = await cdp.eval('!!document.querySelector(".shelf")');
+    const editorGone = await cdp.eval('!!document.querySelector(".editor-body")');
+    check('已返回书架', backOnShelf === true && editorGone === false);
+
+    // 截图存档
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
+    fs.writeFileSync(path.resolve('e2e-shelf.png'), Buffer.from(shot.data, 'base64'));
 
     cdp.close();
   } finally {

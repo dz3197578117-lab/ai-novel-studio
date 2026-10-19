@@ -122,6 +122,14 @@ async function main() {
     await send('Page.navigate', { url: UI });
     await sleep(4200);
 
+    // 首页是书架，先点第一本进入写作台
+    await evaluate(`(() => {
+      const card = document.querySelector('.shelf .lib-card');
+      if (card) card.click();
+      return !!card;
+    })()`);
+    await sleep(2200);
+
     // ── 1. 切章不丢字 ──
     await clickChapter('交互测试·切章');
     await sleep(1000);

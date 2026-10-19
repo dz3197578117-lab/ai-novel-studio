@@ -96,6 +96,13 @@ async function main() {
       });
       await send('Page.navigate', { url: TARGET });
       await sleep(2600);
+      // 首页是书架，先点第一本进入写作台，否则量不到编辑器布局
+      await evaluate(`(() => {
+        const card = document.querySelector('.shelf .lib-card');
+        if (card) card.click();
+        return !!card;
+      })()`);
+      await sleep(1600);
 
       const info = await evaluate(`(() => {
         const doc = document.documentElement;

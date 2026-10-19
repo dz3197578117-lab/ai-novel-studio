@@ -8,9 +8,12 @@ import { EntityManager } from './components/EntityManager';
 import { SettingsDialog } from './components/SettingsDialog';
 import { ExportDialog } from './components/ExportDialog';
 import { ImageDialog } from './components/ImageDialog';
-import { ProjectLibrary } from './components/ProjectLibrary';
+import { ShelfPage } from './components/ShelfPage';
 
-type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | 'library' | null;
+type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | null;
+
+/** 书架（主页） / 写作台 */
+type View = 'shelf' | 'workspace';
 
 export function App() {
   const project = useNovel((s) => s.project);
@@ -19,13 +22,16 @@ export function App() {
   const clearError = useNovel((s) => s.clearError);
   const loadProjects = useNovel((s) => s.loadProjects);
 
+  /** 打开软件默认落在书架，而不是直接进编辑器 */
+  const [view, setView] = useState<View>('shelf');
   const [dialog, setDialog] = useState<DialogKey>(null);
 
+  // 进入写作台时加载作品列表（侧边栏下拉要用）
   useEffect(() => {
-    void loadProjects();
-  }, [loadProjects]);
+    if (view === 'workspace') void loadProjects();
+  }, [view, loadProjects]);
 
-  // 错误提示 3 秒自动消失
+  // 错误提示 4 秒自动消失
   useEffect(() => {
     if (!error) return;
     const t = setTimeout(clearError, 4000);
@@ -33,44 +39,56 @@ export function App() {
   }, [error, clearError]);
 
   return (
-    <div className="app">
+    <>
       {loading && <div className="loading-bar" />}
 
-      <Sidebar
-        onNewProject={() => setDialog('project')}
-        onEditProject={() => setDialog('project')}
-      />
+      {view === 'shelf' ? (
+        <ShelfPage onOpenWorkspace={() => setView('workspace')} />
+      ) : (
+        <div className="app">
+          <Sidebar
+            onNewProject={() => setDialog('project')}
+            onEditProject={() => setDialog('project')}
+            onBackToShelf={() => setView('shelf')}
+          />
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <TopBar onOpen={setDialog} hasProject={Boolean(project)} />
-        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          <Editor />
-          <AiPanel />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <TopBar
+              onOpen={setDialog}
+              hasProject={Boolean(project)}
+              onBackToShelf={() => setView('shelf')}
+            />
+            <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+              <Editor />
+              <AiPanel />
+            </div>
+          </div>
+
+          <ProjectDialog
+            open={dialog === 'project'}
+            onClose={() => setDialog(null)}
+            project={dialog === 'project' ? project : null}
+          />
+          <EntityManager open={dialog === 'entities'} onClose={() => setDialog(null)} />
+          <SettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} />
+          <ExportDialog open={dialog === 'export'} onClose={() => setDialog(null)} />
+          <ImageDialog open={dialog === 'image'} onClose={() => setDialog(null)} />
         </div>
-      </div>
-
-      <ProjectDialog
-        open={dialog === 'project'}
-        onClose={() => setDialog(null)}
-        project={dialog === 'project' ? project : null}
-      />
-      <EntityManager open={dialog === 'entities'} onClose={() => setDialog(null)} />
-      <SettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} />
-      <ExportDialog open={dialog === 'export'} onClose={() => setDialog(null)} />
-      <ImageDialog open={dialog === 'image'} onClose={() => setDialog(null)} />
-      <ProjectLibrary open={dialog === 'library'} onClose={() => setDialog(null)} />
+      )}
 
       {error && <div className="toast">{error}</div>}
-    </div>
+    </>
   );
 }
 
 function TopBar({
   onOpen,
   hasProject,
+  onBackToShelf,
 }: {
   onOpen: (d: DialogKey) => void;
   hasProject: boolean;
+  onBackToShelf: () => void;
 }) {
   return (
     <div
@@ -83,8 +101,8 @@ function TopBar({
         flexShrink: 0,
       }}
     >
-      <button className="ghost" onClick={() => onOpen('library')}>
-        📖 作品库
+      <button className="ghost" onClick={onBackToShelf} title="返回书架">
+        ← 书架
       </button>
       <button className="ghost" onClick={() => onOpen('entities')} disabled={!hasProject}>
         📚 设定库

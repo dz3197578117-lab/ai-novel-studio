@@ -9,9 +9,11 @@ type RenameTarget = { kind: 'chapter' | 'volume'; id: string } | null;
 export function Sidebar({
   onNewProject,
   onEditProject,
+  onBackToShelf,
 }: {
   onNewProject: () => void;
   onEditProject: () => void;
+  onBackToShelf: () => void;
 }) {
   const projects = useNovel((s) => s.projects);
   const project = useNovel((s) => s.project);
@@ -156,8 +158,8 @@ export function Sidebar({
 
   return (
     <aside className="sidebar">
-      <div className="brand">
-        NovelForge <small>AI 创作台</small>
+      <div className="brand brand-clickable" onClick={onBackToShelf} title="返回书架">
+        <span>←</span> NovelForge <small>AI 创作台</small>
       </div>
 
       <div className="section">

@@ -83,6 +83,14 @@ async function main() {
     await send('Page.navigate', { url: UI });
     await sleep(4200);
 
+    // 首页是书架，先点第一本进入写作台
+    await evaluate(`(() => {
+      const card = document.querySelector('.shelf .lib-card');
+      if (card) card.click();
+      return !!card;
+    })()`);
+    await sleep(2200);
+
     const probe = `(() => {
       const ta = document.querySelector('textarea.fiction');
       if (!ta) return { error: '无编辑器' };
