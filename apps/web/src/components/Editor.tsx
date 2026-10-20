@@ -590,7 +590,7 @@ export function Editor() {
               </button>
             </label>
             <textarea
-              rows={2}
+              rows={3}
               value={outline}
               placeholder="这一章要发生什么：谁、做了什么、结果如何、留下什么悬念"
               onChange={(e) => {
@@ -600,53 +600,47 @@ export function Editor() {
             />
           </div>
 
+          {/* 写作前的准备区：视角 / 查资料 / 规划，统一排版 */}
+          <div className="prep">
           {/* 本章视角：楔子/序章这类特殊章节可单独覆盖 */}
-          <div className="field" style={{ marginBottom: 0, marginTop: 10 }}>
-            <label
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <span>本章视角</span>
-              <select
-                value={povOverride ?? ''}
-                onChange={(e) =>
-                  void changePov(e.target.value ? (e.target.value as NarrativePov) : null)
-                }
-                style={{ maxWidth: 230 }}
-              >
-                <option value="">
-                  继承项目（{POV_TEXT[project?.pov ?? 'auto'] ?? '未指定'}）
-                </option>
-                {POV_CHOICES.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
+          <div>
+            <div className="prep-head">
+              <span className="prep-title">本章视角</span>
+              <div className="pov-bar">
+                <select
+                  value={povOverride ?? ''}
+                  onChange={(e) =>
+                    void changePov(e.target.value ? (e.target.value as NarrativePov) : null)
+                  }
+                >
+                  <option value="">
+                    继承项目（{POV_TEXT[project?.pov ?? 'auto'] ?? '未指定'}）
                   </option>
-                ))}
-              </select>
-            </label>
+                  {POV_CHOICES.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             {povOverride && (
-              <div className="hint" style={{ marginTop: 4 }}>
+              <div className="prep-note">
                 本章单独用「{POV_TEXT[povOverride]}」，其他章节仍按项目默认。
               </div>
             )}
           </div>
 
           {/* 写前事实核查：AI 先说清要核实什么，再检索资料 */}
-          <div className="field" style={{ marginBottom: 0, marginTop: 10 }}>
-            <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-              <span>
+          <div>
+            <div className="prep-head">
+              <span className="prep-title">
                 写前查资料
                 {facts.length > 0 && (
-                  <span className="hint" style={{ marginLeft: 6 }}>
-                    {facts.length} 条待核实
-                  </span>
+                  <span className="badge warn">{facts.length} 条待核实</span>
                 )}
               </span>
-              <span style={{ display: 'flex', gap: 4 }}>
+              <span className="prep-actions">
                 {facts.length > 0 && (
                   <button className="count-chip" onClick={() => setShowFacts((v) => !v)}>
                     {showFacts ? '收起' : '查看'}
@@ -661,47 +655,50 @@ export function Editor() {
                   {factBusy ? '分析中…' : facts.length ? '重新生成' : 'AI 列事实清单'}
                 </button>
               </span>
-            </label>
+            </div>
 
             {showFacts && facts.length > 0 && (
-              <div className="plan-result" style={{ marginTop: 6 }}>
-                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.9 }}>
-                  {facts.map((f, i) => (
-                    <li key={`${f.point}-${i}`}>
-                      {f.mustHave && <b style={{ color: 'var(--accent)' }}>必查 </b>}
-                      {f.point}
-                      {factSheet?.hits
-                        .filter((h) => h.forPoints.includes(f.point))
-                        .map((h, j) => (
-                          <div
-                            key={j}
-                            style={{ fontSize: 11, opacity: 0.8, marginTop: 2, lineHeight: 1.6 }}
-                          >
-                            资料：{h.docTitle}
-                            {h.source ? ` · ${h.source}` : ''} —{' '}
-                            {snippetAround(h.text, f.query)}
-                          </div>
-                        ))}
-                    </li>
-                  ))}
-                </ul>
-                <div className="hint" style={{ marginTop: 6 }}>
+              <div className="facts" style={{ marginTop: 8 }}>
+                <div className="facts-body">
+                  <ul className="facts-list">
+                    {facts.map((f, i) => (
+                      <li className="facts-item" key={`${f.point}-${i}`}>
+                        <span className={`facts-flag${f.mustHave ? ' must' : ''}`}>
+                          {f.mustHave ? '必查' : '参考'}
+                        </span>
+                        <div>
+                          <div>{f.point}</div>
+                          {factSheet?.hits
+                            .filter((h) => h.forPoints.includes(f.point))
+                            .map((h, j) => (
+                              <div className="facts-hit" key={j}>
+                                资料：{h.docTitle}
+                                {h.source ? ` · ${h.source}` : ''} —{' '}
+                                {snippetAround(h.text, f.query)}
+                              </div>
+                            ))}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="facts-foot">
                   这些点会用来检索你的资料库，写正文时自动带进上下文。
                 </div>
               </div>
             )}
           </div>
 
-          {/* 规划区（细纲 / 场景卡 / AI 整改）默认收起 */}
-          <div className="layers-bar">
-            <span className="layers-title">
+          {/* 规划区（细纲 / 场景卡 / AI 整改）折叠头 */}
+          <div className="prep-head">
+            <span className="prep-title">
               规划区
-              <span className="layers-meta">
-                细纲{beats.trim() ? ` ${beats.trim().length} 字` : '（空）'} · 场景 {scenes.length}
+              <span className="badge">
+                细纲 {beats.trim() ? `${beats.trim().length} 字` : '空'} · 场景 {scenes.length}
               </span>
             </span>
-            <button className="ghost" onClick={() => setShowLayers((v) => !v)}>
-              {showLayers ? '收起 ▲' : '展开 ▼'}
+            <button className="count-chip" onClick={() => setShowLayers((v) => !v)}>
+              {showLayers ? '收起' : '展开'}
             </button>
           </div>
 
@@ -709,24 +706,24 @@ export function Editor() {
             <>
           {/* 大纲/细纲：提问与整改 */}
           <div className="field" style={{ marginBottom: 0 }}>
-            <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-              <span>AI 提问 / 整改</span>
-              <span style={{ display: 'flex', gap: 4 }}>
+            <div className="prep-head">
+              <span className="prep-title">AI 提问 / 整改</span>
+              <div className="seg">
                 <button
-                  className={`count-chip${planTarget === 'outline' ? ' on' : ''}`}
+                  className={planTarget === 'outline' ? 'on' : ''}
                   onClick={() => setPlanTarget('outline')}
                 >
                   针对大纲
                 </button>
                 <button
-                  className={`count-chip${planTarget === 'beats' ? ' on' : ''}`}
+                  className={planTarget === 'beats' ? 'on' : ''}
                   onClick={() => setPlanTarget('beats')}
                 >
                   针对细纲
                 </button>
-              </span>
-            </label>
-            <div style={{ display: 'flex', gap: 6 }}>
+              </div>
+            </div>
+            <div className="plan-input">
               <input
                 value={planInput}
                 onChange={(e) => setPlanInput(e.target.value)}
@@ -734,7 +731,6 @@ export function Editor() {
                   if (e.key === 'Enter' && !e.shiftKey) void revisePlan('revise');
                 }}
                 placeholder="问：这章会不会跟第3章冲突？  改：把冲突提前到开头，压成三拍"
-                style={{ flex: 1 }}
               />
               <button
                 onClick={() => void revisePlan('ask')}
@@ -756,18 +752,18 @@ export function Editor() {
             {planResult && (
               <div className="plan-result">
                 <div className="plan-result-head">
-                  <span>{planResult.mode === 'ask' ? '回答' : `整改后的${planTarget === 'outline' ? '大纲' : '细纲'}`}</span>
+                  <span>
+                    {planResult.mode === 'ask'
+                      ? '回答'
+                      : `整改后的${planTarget === 'outline' ? '大纲' : '细纲'}`}
+                  </span>
                   <span style={{ display: 'flex', gap: 6 }}>
                     {planResult.mode === 'revise' && (
-                      <button style={{ padding: '2px 8px', fontSize: 11 }} onClick={applyPlan}>
+                      <button className="count-chip" onClick={applyPlan}>
                         应用
                       </button>
                     )}
-                    <button
-                      className="ghost"
-                      style={{ padding: '2px 8px', fontSize: 11 }}
-                      onClick={() => setPlanResult(null)}
-                    >
+                    <button className="count-chip" onClick={() => setPlanResult(null)}>
                       关闭
                     </button>
                   </span>
@@ -779,8 +775,8 @@ export function Editor() {
 
           {/* 细纲：把大纲拆成可写的节拍 */}
           <div className="field" style={{ marginBottom: 0 }}>
-            <label style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>细纲（拆成节拍，可选）</span>
+            <div className="prep-head">
+              <span className="prep-title">细纲（拆成节拍，可选）</span>
               <button
                 className="count-chip"
                 onClick={() => void genBeats()}
@@ -789,7 +785,7 @@ export function Editor() {
               >
                 {layerBusy ? '生成中…' : 'AI 生成细纲'}
               </button>
-            </label>
+            </div>
             <textarea
               rows={3}
               value={beats}
@@ -803,23 +799,22 @@ export function Editor() {
 
           {/* 场景卡：目标-阻力-结果 */}
           <div className="field" style={{ marginBottom: 0 }}>
-            <label style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>
-                场景卡{scenes.length > 0 ? `（${scenes.length} 个）` : ''}
+            <div className="prep-head">
+              <span className="prep-title">
+                场景卡
+                {scenes.length > 0 && <span className="badge">{scenes.length} 个</span>}
               </span>
-              <span style={{ display: 'flex', gap: 6 }}>
-                <button
-                  className="count-chip"
-                  onClick={() => void genScenes()}
-                  disabled={layerBusy}
-                  title="用 AI 把细纲拆成场景卡"
-                >
-                  {layerBusy ? '生成中…' : 'AI 生成场景'}
-                </button>
-              </span>
-            </label>
+              <button
+                className="count-chip"
+                onClick={() => void genScenes()}
+                disabled={layerBusy}
+                title="用 AI 把细纲拆成场景卡"
+              >
+                {layerBusy ? '生成中…' : 'AI 生成场景'}
+              </button>
+            </div>
             {scenes.length === 0 ? (
-              <div className="hint" style={{ marginTop: 0 }}>
+              <div className="prep-note">
                 还没有场景卡。先写细纲，再点「AI 生成场景」，写作时会按场景推进。
               </div>
             ) : (
@@ -841,6 +836,7 @@ export function Editor() {
           </div>
             </>
           )}
+          </div>
 
           <textarea
             className="fiction"
