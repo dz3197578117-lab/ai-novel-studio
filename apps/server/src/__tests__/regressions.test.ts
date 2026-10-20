@@ -15,6 +15,7 @@ const { getDb, transaction } = await import('../db.js');
 const { buildContext } = await import('../ai/context.js');
 const { parseFactPoints } = await import('../ai/facts.js');
 const { buildConsistencyPrompt } = await import('../ai/consistency.js');
+const { parseDraft } = await import('../ai/draft.js');
 const { createProject, getProject, listProjects } = await import('../repos/projects.repo.js');
 const { createChapter, getChapter, setChapterFacts, setChapterSummary, listPriorSummaries } =
   await import('../repos/chapters.repo.js');
@@ -311,4 +312,32 @@ test('一致性检查会列出单独设了视角的章节', () => {
   });
   assert.ok(prompt.user.includes('楔子：第三人称全知'));
   assert.ok(prompt.user.includes('不要按项目默认报错'));
+});
+
+test('AI 方案里的视角会被解析，非法值直接忽略', () => {
+  const ok = parseDraft(
+    JSON.stringify({
+      title: '雪落长夜',
+      logline: '',
+      genre: '',
+      styleGuide: '',
+      pov: 'multi',
+      povNote: '按卷切换',
+      entities: [],
+      volumes: [{ title: '第一卷', summary: '' }],
+      chapters: [{ volumeIndex: 0, title: '第一章', outline: 'o' }],
+    }),
+  );
+  assert.equal(ok.pov, 'multi');
+  assert.equal(ok.povNote, '按卷切换');
+
+  const bad = parseDraft(
+    JSON.stringify({
+      title: '雪落长夜',
+      pov: '上帝视角',
+      volumes: [{ title: '第一卷' }],
+      chapters: [{ volumeIndex: 0, title: '第一章' }],
+    }),
+  );
+  assert.equal(bad.pov, undefined, '不在白名单的视角应当被丢弃');
 });

@@ -449,6 +449,9 @@ export interface NovelDraft {
   logline: string;
   genre: string;
   styleGuide: string;
+  /** AI 建议的叙述视角；用户可在方案预览里改，建书时写入 */
+  pov?: NarrativePov;
+  povNote?: string;
   entities: DraftEntity[];
   volumes: DraftVolume[];
   chapters: DraftChapter[];

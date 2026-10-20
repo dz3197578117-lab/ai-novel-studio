@@ -20,6 +20,8 @@ const DRAFT_SAMPLE = {
   logline: '被逐出家门的少年剑修，为洗清父亲冤屈而重返宗门，却发现真凶就在身边。',
   genre: '古典玄幻',
   styleGuide: '第三人称限知视角，叙述冷峻克制，白描为主，少用形容词，对话简短留白多。',
+  pov: 'third-limited',
+  povNote: '',
   entities: [
     {
       type: 'character',

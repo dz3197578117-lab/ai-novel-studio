@@ -324,6 +324,27 @@ export function AiNovelDialog({
             </div>
           )}
 
+          <div className="field">
+            <label>叙述视角（AI 建议，可改）</label>
+            <select
+              value={draft.pov ?? 'third-limited'}
+              onChange={(e) =>
+                setDraft({ ...draft, pov: e.target.value as NovelDraft['pov'] })
+              }
+              style={{ width: '100%' }}
+            >
+              <option value="third-limited">第三人称限知（跟一个角色）</option>
+              <option value="first">第一人称限知（我）</option>
+              <option value="third-omniscient">第三人称全知</option>
+              <option value="multi">多视角轮换</option>
+            </select>
+            {draft.povNote && (
+              <div className="hint" style={{ marginTop: 4 }}>
+                切换规则：{draft.povNote}
+              </div>
+            )}
+          </div>
+
           {draft.entities.length > 0 && (
             <div className="field">
               <label>设定的 {draft.entities.length} 个条目</label>

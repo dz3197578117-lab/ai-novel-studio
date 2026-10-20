@@ -898,6 +898,8 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
         logline: draft.logline ?? '',
         genre: draft.genre ?? '',
         styleGuide: draft.styleGuide ?? '',
+        pov: draft.pov ?? 'auto',
+        povNote: draft.povNote ?? '',
         status: 'drafting',
       });
 

@@ -292,6 +292,8 @@ export const novelDraftSchema = z.object({
   logline: z.string().max(500).optional(),
   genre: z.string().max(100).optional(),
   styleGuide: z.string().max(4000).optional(),
+  pov: z.enum(['first', 'third-limited', 'third-omniscient', 'multi']).optional(),
+  povNote: z.string().max(500).optional(),
   entities: z.array(draftEntitySchema).max(20).optional(),
   volumes: z
     .array(z.object({ title: z.string().min(1).max(200), summary: z.string().max(20_000).optional() }))

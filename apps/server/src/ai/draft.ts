@@ -4,6 +4,7 @@ import type {
   DraftRequest,
   DraftVolume,
   EntityType,
+  NarrativePov,
   NovelDraft,
 } from '@novelforge/shared';
 import { AiError } from './client.js';
@@ -54,6 +55,8 @@ JSON 结构：
   "logline": "一句话简介，30-60 字",
   "genre": "题材",
   "styleGuide": "文风要求，60-120 字",
+  "pov": "first | third-limited | third-omniscient | multi",
+  "povNote": "视角切换规则，如「每卷最后一章切到反派视角」；不需要就留空",
   "entities": [{ "type": "character|world|faction|term|item|location", "name": "名称", "aliases": [], "summary": "一句话", "fields": [{ "key": "年龄", "value": "17" }], "body": "详细设定", "pinned": true }],
   "volumes": [{ "title": "第一卷 · 卷名", "summary": "本卷概要" }],
   "chapters": [{ "volumeIndex": 0, "title": "第一章 · 章名", "outline": "本章梗概" }]
@@ -64,7 +67,9 @@ JSON 结构：
 2. volumes 为 ${volumeCount} 卷，每卷都要有章节。
 3. chapters 总数严格等于 ${chapterCount} 章，volumeIndex 从 0 开始且不超过 ${volumeCount - 1}。
 4. 人物、地名、势力名前后一致。
-5. 贴合用户需求，不要写成通用套路。`;
+5. pov 按题材选：绝大多数长篇用 third-limited；多主角/群像用 multi；
+   需要回顾、悬念先行的用 third-omniscient；强代入的第一人称故事用 first。
+6. 贴合用户需求，不要写成通用套路。`;
 
   const lines = [`我的需求：${req.idea.trim()}`];
   if (req.genre?.trim()) lines.push(`题材倾向：${req.genre.trim()}`);
@@ -88,13 +93,16 @@ JSON 结构：
   "logline": "一句话简介，30-60 字",
   "genre": "题材",
   "styleGuide": "文风要求，60-120 字",
+  "pov": "first | third-limited | third-omniscient | multi",
+  "povNote": "视角切换规则，如「每卷最后一章切到反派视角」；不需要就留空",
   "entities": [{ "type": "character|world|faction|term|item|location", "name": "名称", "aliases": [], "summary": "一句话", "fields": [{ "key": "年龄", "value": "17" }], "body": "详细设定", "pinned": true }],
   "volumes": [{ "title": "第一卷 · 卷名", "summary": "本卷概要，40-80 字" }]
 }
 
 硬性要求：
 1. entities 至少 4 条，含主角（pinned 为 true）、对立势力、世界观条目。
-2. volumes 恰好 ${volumeCount} 卷，卷概要要能看出来剧情推进。`;
+2. volumes 恰好 ${volumeCount} 卷，卷概要要能看出来剧情推进。
+3. pov 按题材选（多数用 third-limited），不确定就填 third-limited。`;
 
   const lines = [`我的需求：${req.idea.trim()}`];
   if (req.genre?.trim()) lines.push(`题材倾向：${req.genre.trim()}`);
@@ -346,6 +354,14 @@ function normalizeChapters(raw: unknown, volumeCount: number): DraftChapter[] {
 }
 
 /** 解析完整的方案（单次生成） */
+const POV_VALUES = new Set(['first', 'third-limited', 'third-omniscient', 'multi']);
+
+/** 模型给的视角值不可信，不在白名单就当没给 */
+function normalizePov(v: unknown): NarrativePov | undefined {
+  const s = str(v).trim();
+  return POV_VALUES.has(s) ? (s as NarrativePov) : undefined;
+}
+
 export function parseDraft(raw: string): NovelDraft {
   const o = parseObject(raw);
   const title = str(o.title).slice(0, 60);
@@ -359,6 +375,8 @@ export function parseDraft(raw: string): NovelDraft {
     logline: str(o.logline).slice(0, 300),
     genre: str(o.genre).slice(0, 40),
     styleGuide: str(o.styleGuide).slice(0, 1000),
+    pov: normalizePov(o.pov),
+    povNote: str(o.povNote).slice(0, 500) || undefined,
     entities: normalizeEntities(o.entities),
     volumes,
     chapters,
@@ -370,6 +388,8 @@ export interface DraftSkeleton {
   logline: string;
   genre: string;
   styleGuide: string;
+  pov?: NarrativePov;
+  povNote?: string;
   entities: DraftEntity[];
   volumes: DraftVolume[];
 }
@@ -384,6 +404,8 @@ export function parseSkeleton(raw: string): DraftSkeleton {
     logline: str(o.logline).slice(0, 300),
     genre: str(o.genre).slice(0, 40),
     styleGuide: str(o.styleGuide).slice(0, 1000),
+    pov: normalizePov(o.pov),
+    povNote: str(o.povNote).slice(0, 500) || undefined,
     entities: normalizeEntities(o.entities),
     volumes: normalizeVolumes(o.volumes),
   };
