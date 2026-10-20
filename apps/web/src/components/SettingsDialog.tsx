@@ -11,6 +11,53 @@ const PRESETS: { name: string; baseUrl: string; model: string }[] = [
   { name: '本地 Ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:14b' },
 ];
 
+/** 官方服务商与本机/内网地址：不需要额外确认 */
+const TRUSTED_HOSTS = new Set([
+  'api.deepseek.com',
+  'api.openai.com',
+  'dashscope.aliyuncs.com',
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  'host.docker.internal',
+]);
+
+/**
+ * 自定义地址意味着「你的正文会被发到这里」。
+ * 常见服务商和内网自建直接放行，其余地址首次保存时明确确认一次。
+ */
+function confirmCustomEndpoint(baseUrl: string): boolean {
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    return true; // 后端会用 zod 再校验一次
+  }
+  if (TRUSTED_HOSTS.has(host)) return true;
+  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) return true;
+
+  const key = `novelforge:trusted-host:${host}`;
+  try {
+    if (sessionStorage.getItem(key) === '1') return true;
+  } catch {
+    /* ignore */
+  }
+
+  const ok = window.confirm(
+    `这个地址不是常见服务商：${host}\n\n` +
+      '保存后，你写的小说正文、设定与硬约束都会发送到该地址。\n' +
+      '只有在你确认信任该服务时才继续。',
+  );
+  if (ok) {
+    try {
+      sessionStorage.setItem(key, '1');
+    } catch {
+      /* ignore */
+    }
+  }
+  return ok;
+}
+
 interface EditState {
   id: string | null;
   name: string;
@@ -150,6 +197,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
       setMsg({ ok: false, text: '名称、Base URL、模型名都要填' });
       return;
     }
+    if (!confirmCustomEndpoint(editing.baseUrl.trim())) return;
     setBusy(true);
     try {
       const body = {

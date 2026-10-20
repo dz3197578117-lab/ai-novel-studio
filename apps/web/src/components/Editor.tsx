@@ -18,6 +18,52 @@ interface EditSnapshot {
   dirty: boolean;
 }
 
+/**
+ * 本地草稿兜底。
+ * 切章时的兜底保存是「发出去就不管」的异步请求，一旦失败（服务重启、磁盘问题），
+ * 脏标记已经被清掉，beforeunload 也不再拦截，那一段就直接没了。
+ * 这里把失败的内容写进 localStorage，下次打开本章时恢复。
+ */
+const DRAFT_PREFIX = 'novelforge:draft:';
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+
+type DraftPayload = Omit<EditSnapshot, 'dirty'> & { at: number };
+
+function saveLocalDraft(s: Omit<EditSnapshot, 'dirty'>): void {
+  try {
+    localStorage.setItem(
+      DRAFT_PREFIX + s.chapterId,
+      JSON.stringify({ ...s, at: Date.now() } satisfies DraftPayload),
+    );
+  } catch {
+    /* 存不下（隐私模式/配额满）就算了，不能让保底逻辑反而报错 */
+  }
+}
+
+function readLocalDraft(chapterId: string): DraftPayload | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + chapterId);
+    if (!raw) return null;
+    const d = JSON.parse(raw) as DraftPayload;
+    if (!d || typeof d.content !== 'string') return null;
+    if (Date.now() - (d.at ?? 0) > DRAFT_TTL_MS) {
+      clearLocalDraft(chapterId);
+      return null;
+    }
+    return d;
+  } catch {
+    return null;
+  }
+}
+
+function clearLocalDraft(chapterId: string): void {
+  try {
+    localStorage.removeItem(DRAFT_PREFIX + chapterId);
+  } catch {
+    /* ignore */
+  }
+}
+
 /** 中间：章节正文编辑器 */
 export function Editor() {
   const chapter = useNovel((s) => s.currentChapter);
@@ -67,23 +113,42 @@ export function Editor() {
           outline: prev.outline,
           beats: prev.beats,
         })
-        .then(() => refresh())
-        .catch((e) => setError((e as Error).message));
+        .then(() => {
+          clearLocalDraft(prev.chapterId);
+          return refresh();
+        })
+        .catch((e) => {
+          // 保存失败：先把内容落到 localStorage，否则切走后这段就彻底没了
+          saveLocalDraft(prev);
+          setError(`上一章保存失败，内容已暂存在本地：${(e as Error).message}`);
+        });
     }
 
-    setTitle(chapter.title);
-    setContent(chapter.content);
-    setOutline(chapter.outline);
-    setBeats(chapter.beats ?? '');
-    setDirty(false);
-    snapshotRef.current = {
-      chapterId: chapter.id,
-      title: chapter.title,
-      content: chapter.content,
-      outline: chapter.outline,
-      beats: chapter.beats ?? '',
-      dirty: false,
-    };
+    // 本章有上次失败留下的草稿，优先恢复它
+    const local = readLocalDraft(chapter.id);
+    if (local) {
+      setTitle(local.title);
+      setContent(local.content);
+      setOutline(local.outline);
+      setBeats(local.beats);
+      setDirty(true);
+      snapshotRef.current = { ...local, dirty: true };
+      setError('检测到上次未保存成功的本地草稿，已恢复；确认无误后按 Ctrl+S 保存');
+    } else {
+      setTitle(chapter.title);
+      setContent(chapter.content);
+      setOutline(chapter.outline);
+      setBeats(chapter.beats ?? '');
+      setDirty(false);
+      snapshotRef.current = {
+        chapterId: chapter.id,
+        title: chapter.title,
+        content: chapter.content,
+        outline: chapter.outline,
+        beats: chapter.beats ?? '',
+        dirty: false,
+      };
+    }
 
     // 加载本章场景卡
     void api
@@ -210,9 +275,11 @@ export function Editor() {
         };
       }
       setDirty(false);
+      clearLocalDraft(chapter.id);
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      saveLocalDraft({ chapterId: chapter.id, title, content, outline, beats });
+      setError(`保存失败，内容已暂存在本地：${(e as Error).message}`);
     } finally {
       setSaving(false);
     }

@@ -1,4 +1,5 @@
 import type { StreamEvent } from '@novelforge/shared';
+import { authHeaders } from './client';
 
 export interface StreamCallbacks {
   onMeta?: (memoryUsed: NonNullable<Extract<StreamEvent, { type: 'meta' }>['memoryUsed']>) => void;
@@ -18,7 +19,7 @@ export function streamWrite(body: unknown, cb: StreamCallbacks): () => void {
     try {
       const res = await fetch('/api/write/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify(body),
         signal: controller.signal,
       });
