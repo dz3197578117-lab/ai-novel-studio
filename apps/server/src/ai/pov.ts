@@ -43,24 +43,64 @@ export function povLabel(pov: NarrativePov | undefined): string {
   return POV_LABEL[(pov ?? 'auto') as NarrativePov] ?? POV_LABEL.auto;
 }
 
+/** 没有声明切换规则时的默认口子：换章、换节、时空跳转 */
+const DEFAULT_SWITCH_SLOTS = '章节开头、分节处、时间或地点跳转之后，可以换视角人物';
+
+const MARKER_RULE = '必须有可辨识的标记：空行分节、小节标题、或另起一段以人名开头';
+
 /**
- * 生成注入用的视角守则。未指定（auto）时返回 null，保持老作品行为不变。
+ * 生成注入用的视角守则。
+ *
+ * 关键：给的是「默认视角 + 例外条款」，不是「全书唯一视角」。
+ * 长篇不可能一种视角写到底——限死会把合法的场景切换也判成错误，
+ * 模型真遇到需要换视角的段落时会硬撑，写出别扭的「假装不知道」。
+ * 未指定（auto）时返回 null，保持老作品行为不变。
  */
 export function buildPovGuide(project: Project): string | null {
   const pov = (project.pov ?? 'auto') as NarrativePov;
   if (pov === 'auto') return null;
-  const lines = [`本书为「${povLabel(pov)}」。`, ...RULES[pov as FixedPov].map((r) => `- ${r}`)];
-  const note = (project.povNote ?? '').trim();
-  if (note) lines.push(`- 作者补充：${note}`);
+
+  const switchRule = (project.povNote ?? '').trim();
+  const lines = [
+    `本书**默认**「${povLabel(pov)}」，单个场景之内保持这个视角。`,
+    ...RULES[pov as FixedPov].map((r) => `- ${r}`),
+    '',
+    '**允许的切换**：',
+    switchRule
+      ? switchRule
+          .split('\n')
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .map((l) => `- ${l}`)
+          .join('\n')
+      : `- ${DEFAULT_SWITCH_SLOTS}`,
+    `- ${MARKER_RULE}`,
+    '- 同一个场景内（时间连续、地点未变、人物未离场）不得从一个人的内心跳到另一个人的内心',
+  ];
   return lines.join('\n');
 }
 
-/** 给一致性检查用的「设定说明」，让它以设定为基准而不是从正文反推 */
+/**
+ * 给一致性检查用的判定标准。
+ * 必须区分「合法切换」和「越界」——否则检查器会把正常的多视角写法全判成违规。
+ */
 export function buildPovCheckNote(project: Project): string {
   const pov = (project.pov ?? 'auto') as NarrativePov;
   if (pov === 'auto') {
-    return '本书未指定叙述视角。请先从正文推断实际人称（「我」还是「他」），再检查是否前后一致。';
+    return '本书未指定视角。先推断正文实际人称（「我」还是「他」），再查前后是否一致。';
   }
-  const guide = buildPovGuide(project);
-  return `本书设定为「${povLabel(pov)}」。检查时以此为基准，不要从正文反推。\n${guide ?? ''}`;
+
+  const switchRule = (project.povNote ?? '').trim();
+  return [
+    `本书默认「${povLabel(pov)}」。`,
+    switchRule
+      ? `作者声明的切换规则：${switchRule}`
+      : `作者未声明额外规则，只允许在${DEFAULT_SWITCH_SLOTS}。`,
+    '判定标准：',
+    `- 切换落在上述规则之内、且${MARKER_RULE} → 不报`,
+    '- 切换在规则之内但没有标记，读者分不清谁在看 → 报 medium',
+    '- 切换不在规则之内，或发生在同一场景内 → 报 medium',
+    '- 场景内跳进非视角人物内心（head-hopping）→ 报 high',
+    '- 只写视角人物感知不到的信息（他不在场、听不到、看不见）→ 报 high',
+  ].join('\n');
 }

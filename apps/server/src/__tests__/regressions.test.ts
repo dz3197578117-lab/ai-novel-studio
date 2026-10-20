@@ -242,5 +242,29 @@ test('一致性检查以视角设定为基准', () => {
     timeline: [],
   });
   assert.ok(prompt.user.includes('第一人称限知'));
-  assert.ok(prompt.user.includes('以此为基准'), '应明确要求以设定为基准');
+  assert.ok(prompt.user.includes('判定标准'), '应给出可执行的判定标准');
+  assert.ok(prompt.user.includes('合法') || prompt.user.includes('不报'), '应说明合法切换不报');
+});
+
+test('视角守则声明「默认 + 允许的切换」，不是全书唯一', () => {
+  const p = createProject({
+    title: '可切换',
+    pov: 'third-limited',
+    povNote: '每卷最后一章切到反派视角，另起一节并以人名开头',
+  });
+  const c = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+
+  assert.ok(ctx.system.includes('默认'), '应写明是默认视角');
+  assert.ok(ctx.system.includes('允许的切换'), '应给出例外条款');
+  assert.ok(ctx.system.includes('每卷最后一章切到反派视角'), '应带上作者写的规则');
+  assert.ok(ctx.system.includes('标记'), '应要求可辨识的切换标记');
+});
+
+test('未写切换规则时给出默认口子（换章/分节/时空跳转）', () => {
+  const p = createProject({ title: '默认口子', pov: 'first' });
+  const c = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+  assert.ok(ctx.system.includes('章节开头'));
+  assert.ok(ctx.system.includes('分节'));
 });

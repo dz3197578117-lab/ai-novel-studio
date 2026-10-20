@@ -63,7 +63,7 @@ export function buildContext(params: {
    */
   const REQUIRED_CAP = {
     rules: 6000,
-    pov: 800,
+    pov: 1200,
     constraints: 1500,
     outline: 4000,
     beats: 3000,
@@ -275,7 +275,7 @@ export function buildContext(params: {
     project.logline ? `作品简介：${project.logline}` : '',
     project.genre ? `题材类型：${project.genre}` : '',
     '',
-    ...blocks,
+    blocks.join('\n\n'),
     '',
     '## 硬性要求',
     '- 严格保持已有设定，不得擅自更改人物姓名、关系、能力与既定事实。',

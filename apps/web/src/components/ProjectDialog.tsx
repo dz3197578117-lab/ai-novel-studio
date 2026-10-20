@@ -14,10 +14,10 @@ const POV_OPTIONS: { value: NarrativePov; label: string }[] = [
 
 const POV_HINT: Record<NarrativePov, string> = {
   auto: '不额外注入视角规则，AI 按文风与已有正文推断。',
-  first: '只写「我」的所见所感，不写他人心理，不写「我」不在场的场景。',
-  'third-limited': '每章只跟一个视角人物，不跳到别人心里。可在这里写明跟谁。',
+  first: '场景内只写「我」的所见所感。换章、分节、时空跳转时仍可按下面的规则切视角。',
+  'third-limited': '场景内只跟一个视角人物，不跳到别人心里。换章或分节时可以换人，规则写在下面。',
   'third-omniscient': '叙述者可进入任何角色内心，但不得提前泄底。',
-  multi: '按章或按节切换视角，场景内不跳。可在这里写明切换规则。',
+  multi: '每个场景一个视角人物；切换靠分节标记让人认出来。',
 };
 
 /** 新建/编辑作品 */
@@ -89,7 +89,7 @@ export function ProjectDialog({
         <input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="玄幻 / 都市 / 悬疑 …" />
       </div>
       <div className="field">
-        <label>叙述视角（写入每次生成的硬规则）</label>
+        <label>默认叙述视角（单个场景内保持，不是全书唯一）</label>
         <select
           value={pov}
           onChange={(e) => setPov(e.target.value as NarrativePov)}
@@ -108,18 +108,18 @@ export function ProjectDialog({
 
       {pov !== 'auto' && (
         <div className="field">
-          <label>视角补充规则（可选）</label>
-          <input
+          <label>允许的视角切换（可选，一行一条）</label>
+          <textarea
+            rows={3}
             value={povNote}
             onChange={(e) => setPovNote(e.target.value)}
             placeholder={
-              pov === 'multi'
-                ? '例：按章切换；单章内不换视角；切换时另起一节并标出人物名'
-                : pov === 'third-limited'
-                  ? '例：视角人物为林尘；配角场景只通过林尘的观察带出'
-                  : '例：全书不出现第二人称；回忆段落仍用第一人称'
+              '例：每卷最后一章切到反派视角，另起一节并以人名开头\n例：亲密场景结束后可切到另一方，用空行分节\n例：插入书信、审讯记录时可直接换载体'
             }
           />
+          <div className="hint" style={{ marginTop: 4 }}>
+            不填则默认只在换章、分节、时空跳转时允许切换。无论怎么切，都要有让人认得出的标记。
+          </div>
         </div>
       )}
 
