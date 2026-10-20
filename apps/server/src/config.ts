@@ -18,6 +18,15 @@ export const EXPORTS_DIR = path.join(DATA_DIR, 'exports');
 export const PORT = Number(process.env.PORT ?? 8787);
 export const HOST = process.env.HOST ?? '127.0.0.1';
 
+/** 是否只监听本机。监听 0.0.0.0 意味着同网段任何人都能读写你的作品 */
+export const IS_LOCAL_BIND = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
+
+/**
+ * 非本机监听时必须设置的访问令牌。
+ * 本地单人工具没有账号体系，暴露到局域网后至少要靠一个共享令牌挡住陌生人。
+ */
+export const ACCESS_TOKEN = process.env.ACCESS_TOKEN ?? '';
+
 /** 端口被占用时自动顺延，最多尝试 10 个 */
 export const PORT_RETRY = 10;
 

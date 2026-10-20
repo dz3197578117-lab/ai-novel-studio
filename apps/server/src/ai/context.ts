@@ -44,10 +44,30 @@ export function buildContext(params: {
   memoryBudget?: number;
 }): BuiltContext {
   const { project, chapter, mode, instruction, selection } = params;
-  const budget = params.memoryBudget ?? 6000;
+  /**
+   * 默认预算 20000 字符（约 1.3 万 token）。
+   * 原来 6000 太小：光是「硬约束 + 大纲」就能吃光，前情提要一条都进不来，
+   * 而前情正是长篇不崩的关键。必选项的 cap 之和（16000）小于这个默认预算，
+   * 所以即使全部写满，也天然给记忆留了 4000 字。
+   */
+  const budget = params.memoryBudget ?? 20_000;
   const memoryUsed: MemoryUsage[] = [];
   let remaining = budget;
 
+  /**
+   * 必选项（硬约束 / 大纲 / 细纲 / 场景 / 文风）的单块上限。
+   * 没有上限时，作者写 5 万字硬约束会把模型上下文整个挤爆；
+   * 截断比请求直接失败好，而且 memoryUsed 里能看到截掉了多少。
+   */
+  const REQUIRED_CAP = {
+    rules: 6000,
+    outline: 4000,
+    beats: 3000,
+    scenes: 2000,
+    style: 1000,
+  } as const;
+
+  /** 可裁剪的记忆块：装不下就不装，预算如实递减 */
   const take = (kind: MemoryUsage['kind'], label: string, text: string): string | null => {
     const trimmed = text.trim();
     if (!trimmed) return null;
@@ -58,15 +78,51 @@ export function buildContext(params: {
     return trimmed;
   };
 
+  /**
+   * 必选项：一定注入，同样从预算里扣（可为 0，表示预算已经用尽）。
+   * 预算用尽时不再硬塞——否则 5 万字硬约束会让整个请求超出模型上下文。
+   */
+  const required = (label: string, text: string, cap: number): string | null => {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const allowance = Math.min(cap, Math.max(0, remaining));
+    if (allowance < 80) return null; // 剩这么点字不如不塞，免得截出半句话
+
+    let out = trimmed;
+    if (trimmed.length > allowance) {
+      out = `${trimmed.slice(0, allowance)}\n…（超出可注入额度，已截断）`;
+    }
+    remaining -= out.length;
+    memoryUsed.push({ kind: 'style', label, chars: out.length });
+    return out;
+  };
+
   const blocks: string[] = [];
 
   // 0. 作者硬约束（考据规则 / 制度 / 禁令）——最高优先级
-  if (project.rules?.trim()) {
-    blocks.push(`## 作者硬约束（必须遵守，违反即算写错）\n${project.rules.trim()}`);
-    memoryUsed.push({ kind: 'style', label: '作者硬约束', chars: project.rules.length });
+  const rulesBlock = required('作者硬约束', project.rules ?? '', REQUIRED_CAP.rules);
+  if (rulesBlock) {
+    blocks.push(`## 作者硬约束（必须遵守，违反即算写错）\n${rulesBlock}`);
   }
 
-  // 1. 固定设定（人物/世界观等）
+  // 1. 本章任务：大纲 → 细纲 → 场景（必选项，最先占预算）
+  const outlineBlock = required('本章大纲', chapter.outline, REQUIRED_CAP.outline);
+  if (outlineBlock) blocks.push(`## 本章大纲（必须遵守）\n${outlineBlock}`);
+
+  const beatsBlock = required('本章细纲', chapter.beats ?? '', REQUIRED_CAP.beats);
+  if (beatsBlock) blocks.push(`## 本章细纲（按这些节拍写，不要跳跃）\n${beatsBlock}`);
+
+  const scenes = listScenes(chapter.id);
+  if (scenes.length > 0) {
+    const scenesBlock = required(
+      `${scenes.length} 个场景`,
+      scenesToText(scenes),
+      REQUIRED_CAP.scenes,
+    );
+    if (scenesBlock) blocks.push(`## 场景安排（按顺序推进）\n${scenesBlock}`);
+  }
+
+  // 2. 固定设定（人物/世界观等）
   const pinned = listPinnedEntities(project.id);
   if (pinned.length > 0) {
     const lines: string[] = [];
@@ -136,9 +192,11 @@ export function buildContext(params: {
     const picked: string[] = [];
     for (const p of priors) {
       const line = `- ${p.title}：${p.summary}`;
-      if (line.length > remaining) break;
+      // 放不下就跳过这一条，继续试更早（通常更短）的摘要；
+      // 用 break 会在「最近一章摘要偏长」时把整段前情全部丢掉。
+      if (line.length > remaining) continue;
       remaining -= line.length;
-      picked.unshift(`- ${p.title}：${p.summary}`);
+      picked.unshift(line);
     }
     if (picked.length) {
       memoryUsed.push({
@@ -150,30 +208,7 @@ export function buildContext(params: {
     }
   }
 
-  // 4. 章节大纲
-  if (chapter.outline.trim()) {
-    blocks.push(`## 本章大纲（必须遵守）\n${chapter.outline.trim()}`);
-    memoryUsed.push({ kind: 'style', label: '本章大纲', chars: chapter.outline.length });
-  }
-
-  // 4.1 细纲（把大纲拆成节拍，层次更细）
-  if (chapter.beats?.trim()) {
-    blocks.push(`## 本章细纲（按这些节拍写，不要跳跃）\n${chapter.beats.trim()}`);
-    memoryUsed.push({ kind: 'style', label: '本章细纲', chars: chapter.beats.length });
-  }
-
-  // 4.2 场景卡（目标-阻力-结果）
-  const scenes = listScenes(chapter.id);
-  if (scenes.length > 0) {
-    const text = scenesToText(scenes);
-    if (text.length <= remaining) {
-      remaining -= text.length;
-      blocks.push(`## 场景安排（按顺序推进）\n${text}`);
-      memoryUsed.push({ kind: 'style', label: `${scenes.length} 个场景`, chars: text.length });
-    }
-  }
-
-  // 4.3 作者资料（引用溯源：明确标出来自哪份资料）
+  // 4. 作者资料（引用溯源：明确标出来自哪份资料）
   const hits = searchKnowledge(project.id, `${chapter.title} ${chapter.outline.slice(0, 200)}`, 3);
   if (hits.length > 0) {
     const lines = hits.map(
@@ -193,8 +228,13 @@ export function buildContext(params: {
     }
   }
 
-  // 5. 文风与硬约束
-  const style = project.styleGuide.trim() || '自然流畅的中文小说叙述，克制而具体，避免辞藻堆砌。';
+  // 5. 文风（必选项）
+  const style =
+    required(
+      '文风要求',
+      project.styleGuide,
+      REQUIRED_CAP.style,
+    ) || '自然流畅的中文小说叙述，克制而具体，避免辞藻堆砌。';
   blocks.push(`## 文风要求\n${style}`);
 
   const system = [

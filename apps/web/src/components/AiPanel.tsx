@@ -40,6 +40,7 @@ export function AiPanel() {
     startedForRef.current = chapter.id;
 
     abortRef.current = streamWrite(
+      // 记忆预算不传：由后端给默认值，避免同一个数字在两处维护
       {
         projectId: project.id,
         chapterId: chapter.id,
@@ -51,7 +52,6 @@ export function AiPanel() {
             : useMode === 'continue'
               ? undefined
               : getSelectionText() || undefined,
-        memoryBudget: 6000,
       },
       {
         onMeta: (m) => setMemory(m),

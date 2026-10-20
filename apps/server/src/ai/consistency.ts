@@ -10,6 +10,22 @@ import type {
 import { AiError } from './client.js';
 import { repairTruncatedJson } from './draft.js';
 
+/**
+ * 允许的问题类型。提示词里的枚举示例必须和这里保持一致——
+ * 之前新增 history / pov 时只改了 KINDS 没改示例，模型因此很少输出这两类。
+ */
+const ISSUE_KINDS = [
+  'character',
+  'timeline',
+  'setting',
+  'naming',
+  'plot',
+  'foreshadow',
+  'history',
+  'pov',
+  'other',
+] as const;
+
 const TYPE_LABEL: Record<string, string> = {
   world: '世界观',
   character: '人物',
@@ -118,7 +134,7 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 {
   "issues": [
     {
-      "kind": "character|timeline|setting|naming|plot|foreshadow",
+      "kind": "${ISSUE_KINDS.join('|')}",
       "severity": "low|medium|high",
       "title": "一句话说清问题",
       "detail": "哪里矛盾：具体引用了什么设定、哪一章的什么描写",
@@ -167,17 +183,7 @@ ${lastContent ? `\n## 最后一章正文（结尾部分，用于判断当下写�
   };
 }
 
-const KINDS = new Set([
-  'character',
-  'timeline',
-  'setting',
-  'naming',
-  'plot',
-  'foreshadow',
-  'history',
-  'pov',
-  'other',
-]);
+const KINDS = new Set<string>(ISSUE_KINDS);
 const SEVERITIES = new Set(['low', 'medium', 'high']);
 
 /** 解析检查结果，容忍代码块与被截断的输出 */

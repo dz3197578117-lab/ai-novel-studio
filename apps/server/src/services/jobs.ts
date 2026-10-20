@@ -33,6 +33,14 @@ export interface Job<T = unknown> {
 const jobs = new Map<string, Job<unknown>>();
 /** 最多保留多少个任务记录，防止长跑后内存堆积 */
 const MAX_JOBS = 30;
+/**
+ * 同时跑的任务上限。
+ * 连点「生成目录」会起一堆 job 并发打模型接口，直接撞服务商限流（429）；
+ * 超过上限的进队列，按顺序跑。
+ */
+const MAX_CONCURRENT_JOBS = 2;
+let activeJobs = 0;
+const waiting: Array<() => void> = [];
 
 export function createJob<T>(kind: string, initial?: Partial<JobProgress>): Job<T> {
   const ts = new Date().toISOString();
@@ -73,14 +81,30 @@ export function getJob<T = unknown>(id: string): Job<T> | null {
   return (jobs.get(id) as Job<T> | undefined) ?? null;
 }
 
-/** 后台执行；不阻塞请求，失败写进任务状态 */
+/** 后台执行；不阻塞请求，失败写进任务状态。超过并发上限时排队 */
 export function runJob<T>(job: Job<T>, task: () => Promise<T>): void {
-  void (async () => {
-    try {
-      const result = await task();
-      patchJob(job.id, { status: 'done', result });
-    } catch (e) {
-      patchJob(job.id, { status: 'error', error: (e as Error).message || '任务失败' });
-    }
-  })();
+  const start = () => {
+    activeJobs++;
+    void (async () => {
+      try {
+        const result = await task();
+        patchJob(job.id, { status: 'done', result });
+      } catch (e) {
+        patchJob(job.id, { status: 'error', error: (e as Error).message || '任务失败' });
+      } finally {
+        activeJobs--;
+        waiting.shift()?.();
+      }
+    })();
+  };
+
+  if (activeJobs < MAX_CONCURRENT_JOBS) {
+    start();
+    return;
+  }
+
+  patchJob(job.id, {
+    progress: { ...job.progress, note: `排队中（已有 ${activeJobs} 个任务在跑）` },
+  });
+  waiting.push(start);
 }

@@ -65,6 +65,8 @@ async function postWithRetry(
         signal,
       });
     } catch (e) {
+      // 用户点了「停止」：不要当成网络错误重试，否则 abort 后还会再发 3 次请求。
+      if (signal?.aborted || (e as Error)?.name === 'AbortError') throw e;
       // 网络层错误也重试一次
       if (attempt === MAX_ATTEMPTS - 1) throw e;
       await sleep(1500 * 2 ** attempt);

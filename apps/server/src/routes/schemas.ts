@@ -1,5 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * 只接受 http(s) 地址。
+ * baseUrl 决定了「你的正文会被发到哪里」，不校验协议等于允许用户把整本书
+ * POST 到任意地址（file://、内网元数据地址等）。
+ */
+const httpUrl = z
+  .string()
+  .max(500)
+  .refine((v) => {
+    try {
+      const u = new URL(v);
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, '地址必须是 http:// 或 https:// 开头');
+
 export const projectInput = z.object({
   title: z.string().min(1, '标题不能为空').max(200),
   logline: z.string().max(500).optional(),
@@ -203,7 +220,7 @@ export const planReviseInput = z.object({
 /** 一套模型配置 */
 export const profileInput = z.object({
   name: z.string().min(1, '给这套配置起个名字').max(60),
-  baseUrl: z.string().max(500),
+  baseUrl: httpUrl,
   model: z.string().max(200),
   // 允许空串（主动清空）；undefined 表示不修改
   apiKey: z.string().max(500).optional(),
@@ -213,14 +230,14 @@ export const profileInput = z.object({
 
 /** 拉取模型列表 / 测试连通性 */
 export const fetchModelsInput = z.object({
-  baseUrl: z.string().max(500).optional(),
+  baseUrl: httpUrl.optional(),
   apiKey: z.string().max(500).optional(),
   profileId: z.string().max(100).optional(),
 });
 
-/** 图片模型配置 */
+/** 图片模型配置：允许空串表示清空 */
 export const imageSettingsInput = z.object({
-  baseUrl: z.string().max(500),
+  baseUrl: z.union([z.literal(''), httpUrl]),
   apiKey: z.string().max(500).optional(),
   model: z.string().max(200),
 });

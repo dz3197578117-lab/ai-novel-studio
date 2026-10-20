@@ -4,7 +4,7 @@ import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { HOST, IMAGES_DIR, IS_DEV, PORT, PORT_RETRY, DATA_DIR } from './config.js';
+import { HOST, IMAGES_DIR, IS_DEV, PORT, PORT_RETRY, DATA_DIR, ACCESS_TOKEN, IS_LOCAL_BIND } from './config.js';
 import { getDb } from './db.js';
 import { startAutoBackup } from './repos/backup.js';
 import { projectRoutes } from './routes/projects.routes.js';
@@ -32,6 +32,27 @@ export async function buildServer() {
   });
 
   await app.register(cors, { origin: IS_DEV ? true : false });
+
+  /**
+   * 监听非本机地址时强制校验访问令牌。
+   * 本机（默认）不校验，保持「打开就能用」；一旦用 HOST=0.0.0.0 共享到局域网，
+   * 没有这道门，同网段任何人都能读写全部作品、用你的 Key 消耗额度。
+   * 图片静态资源不校验：URL 里是随机 UUID，且 <img> 无法携带请求头。
+   */
+  app.addHook('onRequest', async (req, reply) => {
+    if (IS_LOCAL_BIND || !ACCESS_TOKEN) return;
+    if (req.url.startsWith('/files/')) return;
+
+    const auth = req.headers.authorization;
+    const bearer = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined;
+    const queryToken = (req.query as { token?: string } | undefined)?.token;
+    if ((bearer ?? queryToken) !== ACCESS_TOKEN) {
+      return reply.code(401).send({
+        error: 'unauthorized',
+        message: '需要访问令牌：启动时设置 ACCESS_TOKEN，并在请求头带上 Authorization: Bearer <token>',
+      });
+    }
+  });
 
   // 静态资源：生成的图片
   await app.register(fastifyStatic, {
@@ -76,9 +97,17 @@ export async function buildServer() {
   app.setErrorHandler((err, _req, reply) => {
     app.log.error(err);
     const status = (err as { statusCode?: number }).statusCode ?? 500;
+    const name = (err as { name?: string }).name;
+    // 上游模型错误（AiError）的 message 是给用户看的（限流、Key 无效等），要保留；
+    // 其余 5xx 是内部故障，生产环境不能把 SQL / 路径细节直接吐给客户端。
+    const safeToExpose = status < 500 || name === 'AiError' || IS_DEV;
     reply.code(status).send({
       error: status >= 500 ? 'internal_error' : 'bad_request',
-      message: err instanceof Error ? err.message : String(err),
+      message: safeToExpose
+        ? err instanceof Error
+          ? err.message
+          : String(err)
+        : '服务器内部错误，详情见服务端日志',
     });
   });
 
@@ -86,6 +115,15 @@ export async function buildServer() {
 }
 
 async function main() {
+  if (!IS_LOCAL_BIND && !ACCESS_TOKEN) {
+    console.error(
+      `\n  拒绝启动：HOST=${HOST} 会把作品暴露到局域网，但没有设置 ACCESS_TOKEN。\n` +
+        `  请改用：ACCESS_TOKEN=你的口令 HOST=${HOST} pnpm start\n` +
+        `  或恢复本机访问：HOST=127.0.0.1 pnpm start\n`,
+    );
+    process.exit(1);
+  }
+
   getDb();
   // 数据库定期自动备份（有作品被误删后无从恢复的教训）
   startAutoBackup();
