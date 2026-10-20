@@ -218,6 +218,17 @@ function migrate(d: DatabaseSync): void {
     version = 5;
   }
 
+  if (version < 6) {
+    // 项目级叙述视角：设定后每次生成注入守则，一致性检查以它为基准
+    if (!hasColumn(d, 'projects', 'pov')) {
+      d.exec(`ALTER TABLE projects ADD COLUMN pov TEXT NOT NULL DEFAULT 'auto';`);
+    }
+    if (!hasColumn(d, 'projects', 'pov_note')) {
+      d.exec(`ALTER TABLE projects ADD COLUMN pov_note TEXT NOT NULL DEFAULT '';`);
+    }
+    version = 6;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
     d.exec('COMMIT');
   } catch (e) {

@@ -14,6 +14,7 @@ process.env.NOVELFORGE_DATA_DIR = dataDir;
 const { getDb, transaction } = await import('../db.js');
 const { buildContext } = await import('../ai/context.js');
 const { parseFactPoints } = await import('../ai/facts.js');
+const { buildConsistencyPrompt } = await import('../ai/consistency.js');
 const { createProject, getProject, listProjects } = await import('../repos/projects.repo.js');
 const { createChapter, getChapter, setChapterFacts, setChapterSummary, listPriorSummaries } =
   await import('../repos/chapters.repo.js');
@@ -197,4 +198,49 @@ test('标记已解决的约束不再进入上下文', () => {
   const ch = createChapter(p.id, { title: '第一章', outline: 'o' });
   const ctx = buildContext({ project: getProject(p.id)!, chapter: ch, mode: 'continue' });
   assert.ok(!ctx.system.includes('这条已经改掉了'));
+});
+
+// ───────────── 叙述视角 ─────────────
+
+test('未指定视角时不注入守则，保持老作品行为', () => {
+  const p = createProject({ title: '默认视角' });
+  assert.equal(p.pov, 'auto');
+  const c = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+  assert.ok(!ctx.system.includes('叙述视角（硬性规则）'));
+});
+
+test('第一人称设定会注入对应守则', () => {
+  const p = createProject({ title: '第一人称', pov: 'first' });
+  const c = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+  assert.ok(ctx.system.includes('叙述视角（硬性规则）'));
+  assert.ok(ctx.system.includes('第一人称限知'));
+  assert.ok(ctx.system.includes('不得用角色名指代自己'));
+  assert.ok(ctx.memoryUsed.some((m) => m.label === '视角守则'));
+});
+
+test('多视角会把作者的切换规则一起注入', () => {
+  const p = createProject({
+    title: '多视角',
+    pov: 'multi',
+    povNote: '按章切换，单章内不换视角',
+  });
+  const c = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+  assert.ok(ctx.system.includes('多视角轮换'));
+  assert.ok(ctx.system.includes('按章切换，单章内不换视角'));
+});
+
+test('一致性检查以视角设定为基准', () => {
+  const p = createProject({ title: '检查基准', pov: 'first' });
+  const prompt = buildConsistencyPrompt({
+    project: p,
+    entities: [],
+    chapters: [],
+    foreshadows: [],
+    timeline: [],
+  });
+  assert.ok(prompt.user.includes('第一人称限知'));
+  assert.ok(prompt.user.includes('以此为基准'), '应明确要求以设定为基准');
 });

@@ -9,6 +9,7 @@ import type {
 } from '@novelforge/shared';
 import { AiError } from './client.js';
 import { repairTruncatedJson } from './draft.js';
+import { buildPovCheckNote } from './pov.js';
 
 /**
  * 允许的问题类型。提示词里的枚举示例必须和这里保持一致——
@@ -122,8 +123,9 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
       **回忆/自我抽离**（此时应为整段统一，不是一句一换）
    d) 写进主角当前感知不到的信息（别人的心理、主角不在场的场景）
 
-对 pov 维度：先看正文实际用的人称（「我」还是「他」），再看大纲/细纲/场景卡是否与之一致，
-以及称谓是否符合身份。正文与规划材料人称不一致算 medium。
+对 pov 维度：以「叙述视角设定」为基准（若显示未指定，则先从正文推断实际人称）。
+检查正文是否守住该视角的信息边界——限知视角不得写视角人物感知不到的内容，
+第一人称不得用角色名指代自己。正文与规划材料人称不一致算 medium。
 
 对 history 维度要特别严格：
 - 如果作者写了「硬约束」，任何与之冲突的情节都算 high
@@ -152,6 +154,9 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 题材：${project.genre || '（无）'}
 文风要求：${project.styleGuide || '（无）'}
 ${rules ? `\n## 作者硬约束（最高优先级，违反即算错误）\n${rules}` : ''}
+
+## 叙述视角设定
+${buildPovCheckNote(project)}
 ${knowledgeText ? `\n## 作者提供的参考资料（可据此校对史实/制度）\n${knowledgeText}` : ''}
 
 ## 设定条目（共 ${entities.length} 条，节选前 40 条）

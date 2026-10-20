@@ -3,6 +3,7 @@ import { listPinnedEntities } from '../repos/entities.repo.js';
 import { listPriorSummaries, listVolumes } from '../repos/chapters.repo.js';
 import { listOpenForeshadows, listTimeline } from '../repos/consistency.repo.js';
 import { listOpenConstraints } from '../repos/constraints.repo.js';
+import { buildPovGuide } from './pov.js';
 import { listScenes, searchKnowledge } from '../repos/layers.repo.js';
 import { scenesToText } from './layers.js';
 
@@ -62,6 +63,7 @@ export function buildContext(params: {
    */
   const REQUIRED_CAP = {
     rules: 6000,
+    pov: 800,
     constraints: 1500,
     outline: 4000,
     beats: 3000,
@@ -107,7 +109,14 @@ export function buildContext(params: {
     blocks.push(`## 作者硬约束（必须遵守，违反即算写错）\n${rulesBlock}`);
   }
 
-  // 0.1 一致性检查沉淀下来的约束：上一轮错过的，本轮别再犯
+  // 0.1 叙述视角守则：设定后是硬规则，优先级仅次于作者硬约束
+  const povGuide = buildPovGuide(project);
+  if (povGuide) {
+    const povBlock = required('视角守则', povGuide, REQUIRED_CAP.pov);
+    if (povBlock) blocks.push(`## 叙述视角（硬性规则）\n${povBlock}`);
+  }
+
+  // 0.2 一致性检查沉淀下来的约束：上一轮错过的，本轮别再犯
   const openConstraints = listOpenConstraints(project.id, 6);
   if (openConstraints.length > 0) {
     const constraintsBlock = required(

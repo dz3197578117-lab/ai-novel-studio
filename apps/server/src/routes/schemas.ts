@@ -26,6 +26,8 @@ export const projectInput = z.object({
   styleGuide: z.string().max(4000).optional(),
   brainstorm: z.string().max(100_000).optional(),
   rules: z.string().max(50_000).optional(),
+  pov: z.enum(['auto', 'first', 'third-limited', 'third-omniscient', 'multi']).optional(),
+  povNote: z.string().max(1000).optional(),
 });
 
 export const entityInput = z.object({

@@ -29,6 +29,12 @@ export interface Paginated<T> {
 
 export type ProjectStatus = 'drafting' | 'paused' | 'finished' | 'archived';
 
+/**
+ * 叙述视角。
+ * auto = 不注入守则，由文风与正文自行推断（老作品保持原行为）。
+ */
+export type NarrativePov = 'auto' | 'first' | 'third-limited' | 'third-omniscient' | 'multi';
+
 export interface Project extends Timestamped {
   id: ID;
   title: string;
@@ -47,6 +53,10 @@ export interface Project extends Timestamped {
    * 与「设定条目」不同：这里是作者写死的规则，每次生成和检查都会强制带上。
    */
   rules?: string;
+  /** 叙述视角设定 */
+  pov?: NarrativePov;
+  /** 视角补充规则：限知跟谁、多视角怎么切 */
+  povNote?: string;
 }
 
 /** 作品库列表项：附统计信息，供「小说管理」视图使用 */
