@@ -255,6 +255,7 @@ export function AiNovelDialog({
         chapterCount,
       });
       setDraft(res.draft);
+      setInput(''); // 方案出来后就进入「改方案」模式，别把上一句留在输入框里
     } catch (e) {
       setError((e as Error).message);
     } finally {
