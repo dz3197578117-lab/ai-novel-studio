@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ModelProfilePublic, Settings } from '@novelforge/shared';
 import { api } from '../api/client';
 import { Modal } from './Modal';
+import { UpdatePanel } from './UpdatePanel';
 
 /** 常用服务商预设，点一下填好地址与模型，省去查文档 */
 const PRESETS: { name: string; baseUrl: string; model: string }[] = [
@@ -557,6 +558,8 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           </button>
         </div>
       </div>
+
+      <UpdatePanel />
 
       <p style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.7, marginTop: 6 }}>
         所有 Key 只保存在本机数据库（apps/server/data），不会上传到任何第三方。

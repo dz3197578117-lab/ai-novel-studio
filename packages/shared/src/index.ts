@@ -475,6 +475,48 @@ export interface MemoryUsage {
   chars: number;
 }
 
+// ─────────────────────────── 版本与更新 ───────────────────────────
+
+export type UpdateStatus =
+  | 'up-to-date' // 与远程 main 一致
+  | 'behind' // 远程有更新
+  | 'ahead' // 本地领先（开发者自己提交了还没推）
+  | 'diverged' // 两边都有独立提交
+  | 'no-git' // 压缩包安装，没有 git 历史
+  | 'offline' // 连不上 GitHub
+  | 'error'; // 其他（仓库不存在、限流等）
+
+/** 本机当前安装的版本（不联网） */
+export interface CurrentVersion {
+  version: string;
+  /** 短 sha；没有 git 时为 null */
+  commit: string | null;
+  date: string | null;
+  branch: string | null;
+  /** 是否可能通过 git 原地升级 */
+  canPull: boolean;
+}
+
+export interface UpdateInfo {
+  /** 本地当前版本 */
+  current: CurrentVersion;
+  /** 远程最新提交；查询失败时为 null */
+  latest: {
+    commit: string;
+    short: string;
+    date: string;
+    message: string;
+    url: string;
+  } | null;
+  status: UpdateStatus;
+  behindBy: number | null;
+  aheadBy: number | null;
+  /** owner/repo，解析不到时为 null */
+  repo: string | null;
+  checkedAt: string;
+  message?: string;
+}
+
 // ─────────────────────────── 导出 ───────────────────────────
 
 export type ExportFormat = 'txt' | 'md' | 'docx';
