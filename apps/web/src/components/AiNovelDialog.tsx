@@ -186,9 +186,39 @@ export function AiNovelDialog({
     return () => clearInterval(t);
   }, [drafting]);
 
+  /** 已有方案时，把这句话交给 AI 做局部修改，而不是重开一轮访谈 */
+  async function refine(instruction: string) {
+    if (!draft) return;
+    setMessages((m) => [...m, { role: 'user', content: instruction }]);
+    setInput('');
+    setThinking(true);
+    try {
+      const res = await api.post<{ reply: string; patch: Partial<NovelDraft> }>(
+        '/api/ai/refine-draft',
+        { draft, instruction },
+      );
+      setDraft((d) => (d ? { ...d, ...res.patch } : d));
+      setMessages((m) => [...m, { role: 'assistant', content: res.reply }]);
+    } catch (e) {
+      setMessages((m) => [
+        ...m,
+        { role: 'assistant', content: `没改成功：${(e as Error).message}` },
+      ]);
+    } finally {
+      setThinking(false);
+    }
+  }
+
   async function send(text: string) {
     const content = text.trim();
     if (!content || thinking) return;
+
+    // 方案已经出来了：继续说话就是改方案，不再重新访谈
+    if (draft) {
+      await refine(content);
+      return;
+    }
+
     const next: Msg[] = [...messages, { role: 'user', content }];
     setMessages(next);
     setInput('');
@@ -276,150 +306,50 @@ export function AiNovelDialog({
     }
   }
 
-  const chatPhase = !draft;
-
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title={chatPhase ? 'AI 生成小说' : '确认方案'}
-      wide
-    >
-      {chatPhase ? (
-        <>
-          <div className="chat-log" ref={chatRef}>
-            {messages.map((m, i) => (
-              <div key={i} className={`chat-bubble ${m.role}`}>
-                {m.content}
-              </div>
-            ))}
-            {thinking && <div className="chat-bubble assistant thinking">正在想…</div>}
+    <Modal open={open} onClose={onClose} title="AI 生成小说" wide>
+      <div className={`chat-log${draft ? ' compact' : ''}`} ref={chatRef}>
+        {messages.map((m, i) => (
+          <div key={i} className={`chat-bubble ${m.role}`}>
+            {m.content}
           </div>
+        ))}
+        {thinking && <div className="chat-bubble assistant thinking">正在想…</div>}
+      </div>
 
-          {/* 首轮给类型快捷入口 */}
-          {messages.length === 1 && (
-            <div className="chat-options">
-              {STARTERS.map((s) => (
-                <button key={s} className="count-chip" onClick={() => void send(s)}>
-                  {s}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {/* AI 给出的追问选项 */}
-          {reply && reply.options.length > 0 && !reply.done && (
-            <div className="chat-options">
-              {reply.options.map((o) => (
-                <button key={o} className="count-chip" onClick={() => void send(o)}>
-                  {o}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="chat-composer">
-            <input
-              className="chat-input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void send(input);
-                }
-              }}
-              placeholder="说说你想写的故事，或回答上面的问题…"
-              disabled={thinking}
-            />
-            <button onClick={() => void send(input)} disabled={thinking || !input.trim()}>
-              发送
+      {/* 首轮类型快捷入口 */}
+      {!draft && messages.length === 1 && (
+        <div className="chat-options">
+          {STARTERS.map((st) => (
+            <button key={st} className="count-chip" onClick={() => void send(st)}>
+              {st}
             </button>
-          </div>
+          ))}
+        </div>
+      )}
 
-          <div className="chat-footer">
-            <label className="chat-count">
-              规划章数
-              <input
-                type="number"
-                min={MIN_CHAPTERS}
-                max={MAX_CHAPTERS}
-                value={chapterInput}
-                onChange={(e) => setChapterInput(e.target.value)}
-                onBlur={() => setChapterInput(String(clampCount(Number(chapterInput))))}
-              />
-            </label>
-            <div className="count-presets">
-              {CHAPTER_OPTIONS.map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  className="count-chip"
-                  onClick={() => setChapterInput(String(n))}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-            <div style={{ flex: 1 }} />
-            <button
-              className="primary"
-              onClick={() => void generateDraft()}
-              disabled={drafting || thinking}
-              title={reply?.done ? '用聊好的需求生成方案' : '也可以跳过问答直接生成'}
-            >
-              {drafting ? '构思中…' : reply?.done ? '开始生成方案' : '直接生成'}
+      {/* AI 给出的追问选项 */}
+      {!draft && reply && reply.options.length > 0 && !reply.done && (
+        <div className="chat-options">
+          {reply.options.map((o) => (
+            <button key={o} className="count-chip" onClick={() => void send(o)}>
+              {o}
             </button>
-          </div>
+          ))}
+        </div>
+      )}
 
-          {reply?.done && reply.brief && (
-            <div className="brief-preview">
-              <div className="brief-label">已整理出的需求</div>
-              <div>{reply.brief}</div>
-            </div>
-          )}
-
-          {drafting && (
-            <div className="empty" style={{ padding: '10px 0' }}>
-              已用 {elapsed} 秒 ·{' '}
-              {chapterCount > 10
-                ? `正在分批生成 ${chapterCount} 章${
-                    chapterCount > 300 ? '（预计 10 分钟以上，可以先去泡杯茶）' : '（预计 1-3 分钟）'
-                  }`
-                : '正在构思方案（通常 10-60 秒）'}
-            </div>
-          )}
-        </>
-      ) : (
-        <>
+      {/* 方案直接长在对话下面：边看边改，改完还能接着聊 */}
+      {draft && (
+        <div className="draft-panel">
           {restored && (
-            <div
-              className="hint"
-              style={{
-                marginBottom: 8,
-                padding: '6px 10px',
-                borderRadius: 6,
-                background: 'var(--accent-soft)',
-                color: 'var(--accent)',
-              }}
-            >
+            <div className="hint" style={{ marginBottom: 8, color: 'var(--accent)' }}>
               已恢复上次未建书的方案。
-              <button
-                className="ghost"
-                style={{ marginLeft: 8, padding: '0 6px', fontSize: 11 }}
-                onClick={() => {
-                  clearSavedDraft();
-                  setDraft(null);
-                  setRestored(false);
-                }}
-              >
-                不要了，重新开始
-              </button>
             </div>
           )}
 
-          <div className="draft-head">
-            <div style={{ flex: 1 }}>
+          <div className="draft-panel-head">
+            <div style={{ flex: 1, minWidth: 0 }}>
               <input
                 className="inline-edit draft-title-input"
                 value={draft.title}
@@ -442,6 +372,9 @@ export function AiNovelDialog({
                 )}
               </div>
             </div>
+            <button className="primary" onClick={() => void create()} disabled={creating}>
+              {creating ? '创建中…' : '创建这本书'}
+            </button>
           </div>
 
           <div className="field">
@@ -522,7 +455,7 @@ export function AiNovelDialog({
             </div>
           </div>
 
-          <div className="field">
+          <div className="field" style={{ marginBottom: 0 }}>
             <label>卷章大纲（标题与大纲可直接改；不满意的单章可重做或删掉）</label>
             <div className="draft-outline">
               {draft.volumes.map((v, vi) => (
@@ -576,15 +509,98 @@ export function AiNovelDialog({
             </div>
           </div>
 
-          <div className="row" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
-            <button onClick={() => setDraft(null)} disabled={creating}>
-              ← 回到对话
-            </button>
-            <button className="primary" onClick={create} disabled={creating}>
-              {creating ? '创建中…' : '创建这本书'}
+          <div className="row" style={{ justifyContent: 'flex-end', marginTop: 10 }}>
+            <button
+              className="ghost"
+              onClick={() => {
+                clearSavedDraft();
+                setDraft(null);
+                setRestored(false);
+              }}
+              disabled={creating}
+            >
+              放弃这份方案
             </button>
           </div>
-        </>
+        </div>
+      )}
+
+      <div className={`chat-composer${draft ? ' sticky' : ''}`}>
+        <input
+          className="chat-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void send(input);
+            }
+          }}
+          placeholder={
+            draft
+              ? '接着说想改什么，比如「主角改成女性」「加一个反派势力」「第一章改成楔子」'
+              : '说说你想写的故事，或回答上面的问题…'
+          }
+          disabled={thinking}
+        />
+        <button onClick={() => void send(input)} disabled={thinking || !input.trim()}>
+          {draft ? '调整' : '发送'}
+        </button>
+      </div>
+
+      {!draft && (
+        <div className="chat-footer">
+          <label className="chat-count">
+            规划章数
+            <input
+              type="number"
+              min={MIN_CHAPTERS}
+              max={MAX_CHAPTERS}
+              value={chapterInput}
+              onChange={(e) => setChapterInput(e.target.value)}
+              onBlur={() => setChapterInput(String(clampCount(Number(chapterInput))))}
+            />
+          </label>
+          <div className="count-presets">
+            {CHAPTER_OPTIONS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                className="count-chip"
+                onClick={() => setChapterInput(String(n))}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          <div style={{ flex: 1 }} />
+          <button
+            className="primary"
+            onClick={() => void generateDraft()}
+            disabled={drafting || thinking}
+            title={reply?.done ? '用聊好的需求生成方案' : '也可以跳过问答直接生成'}
+          >
+            {drafting ? '构思中…' : reply?.done ? '开始生成方案' : '直接生成'}
+          </button>
+        </div>
+      )}
+
+      {!draft && reply?.done && reply.brief && (
+        <div className="brief-preview">
+          <div className="brief-label">已整理出的需求</div>
+          <div>{reply.brief}</div>
+        </div>
+      )}
+
+      {!draft && drafting && (
+        <div className="empty" style={{ padding: '10px 0' }}>
+          已用 {elapsed} 秒 ·{' '}
+          {chapterCount > 10
+            ? `正在分批生成 ${chapterCount} 章${
+                chapterCount > 300 ? '（预计 10 分钟以上，可以先去泡杯茶）' : '（预计 1-3 分钟）'
+              }`
+            : '正在构思方案（通常 10-60 秒）'}
+        </div>
       )}
     </Modal>
   );

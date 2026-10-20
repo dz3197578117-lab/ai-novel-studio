@@ -101,6 +101,25 @@ const FACT_SAMPLE = {
   ],
 };
 
+/** 模拟「按指令微调方案」的返回 */
+const REFINE_SAMPLE = {
+  reply: '已按你的要求调整：书名加了副标，并补了一个反派势力「白山楼」。',
+  draft: {
+    ...DRAFT_SAMPLE,
+    title: `${DRAFT_SAMPLE.title}·修订`,
+    entities: [
+      ...DRAFT_SAMPLE.entities,
+      {
+        type: 'faction',
+        name: '白山楼',
+        aliases: [],
+        summary: '与青云宗对立的暗杀组织，专收被逐出宗门的弃徒。',
+        pinned: false,
+      },
+    ],
+  },
+};
+
 const server = http.createServer((req, res) => {
   if (req.url?.endsWith('/chat/completions') && req.method === 'POST') {
     let body = '';
@@ -140,6 +159,8 @@ const server = http.createServer((req, res) => {
       const isScenesRequest = /小说场景设计师/.test(system?.content ?? '');
       // 写前列事实清单
       const isFactRequest = /长篇小说的资料员/.test(system?.content ?? '');
+      // 方案微调
+      const isRefineRequest = /微调一份\*\*已经成型\*\*的方案/.test(system?.content ?? '');
       const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
       // 对话式访谈：第一轮反问，第二轮给结论
       const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
@@ -153,7 +174,9 @@ const server = http.createServer((req, res) => {
       );
 
       let content = SAMPLE.join('');
-      if (isFactRequest) {
+      if (isRefineRequest) {
+        content = JSON.stringify(REFINE_SAMPLE);
+      } else if (isFactRequest) {
         content = JSON.stringify(FACT_SAMPLE);
       } else if (isPlanAsk) {
         content =

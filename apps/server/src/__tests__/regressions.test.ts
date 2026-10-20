@@ -15,7 +15,7 @@ const { getDb, transaction } = await import('../db.js');
 const { buildContext } = await import('../ai/context.js');
 const { parseFactPoints } = await import('../ai/facts.js');
 const { buildConsistencyPrompt } = await import('../ai/consistency.js');
-const { parseDraft } = await import('../ai/draft.js');
+const { parseDraft, parseRefine } = await import('../ai/draft.js');
 const { createProject, getProject, listProjects } = await import('../repos/projects.repo.js');
 const { createChapter, getChapter, setChapterFacts, setChapterSummary, listPriorSummaries } =
   await import('../repos/chapters.repo.js');
@@ -340,4 +340,37 @@ test('AI 方案里的视角会被解析，非法值直接忽略', () => {
     }),
   );
   assert.equal(bad.pov, undefined, '不在白名单的视角应当被丢弃');
+});
+
+// ───────────── 对话中精修方案 ─────────────
+
+test('方案精修只取允许改动的字段，章节多时不许动章节', () => {
+  const raw = JSON.stringify({
+    reply: '改了书名',
+    draft: {
+      title: '新书名',
+      logline: '新简介',
+      volumes: [{ title: '卷一', summary: '' }],
+      chapters: [{ volumeIndex: 0, title: '偷偷加的章', outline: 'x' }],
+    },
+  });
+  const r = parseRefine(raw, false);
+  assert.ok(r);
+  assert.equal(r!.reply, '改了书名');
+  assert.equal(r!.patch.title, '新书名');
+  assert.equal(r!.patch.chapters, undefined, '不允许改章节时不该带回 chapters');
+});
+
+test('章节不多时允许精修改动章节', () => {
+  const raw = JSON.stringify({
+    reply: '加了一章',
+    draft: {
+      title: '书',
+      volumes: [{ title: '卷一', summary: '' }],
+      chapters: [{ volumeIndex: 0, title: '第一章', outline: 'o' }],
+    },
+  });
+  const r = parseRefine(raw, true);
+  assert.ok(r);
+  assert.equal(r!.patch.chapters?.length, 1);
 });

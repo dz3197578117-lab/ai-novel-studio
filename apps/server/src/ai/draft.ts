@@ -737,3 +737,111 @@ export function parseRegeneratedChapter(raw: string, volumeCount: number): Draft
     outline: str(o.outline).slice(0, 3000),
   };
 }
+
+// ───────────────────── 方案精修：按对话指令局部改 ─────────────────────
+
+export interface RefineResult {
+  /** 给用户看的一句话说明 */
+  reply: string;
+  /** 只含允许改动的字段 */
+  patch: Partial<NovelDraft>;
+}
+
+/**
+ * 方案精修的提示词。
+ * 关键约束：没提到的字段必须原样返回，否则每次微调都会把整份方案重写一遍，
+ * 作者手动改过的地方会被冲掉。
+ */
+export function buildRefinePrompt(
+  draft: NovelDraft,
+  instruction: string,
+  allowChapters: boolean,
+): { system: string; user: string } {
+  const system = `你是小说策划编辑，正在按作者的追加要求微调一份**已经成型**的方案。
+
+铁律：
+1. 只改作者要求涉及的部分。没提到的字段必须原样返回，措辞一个字都不要动。
+2. 不要顺手润色、不要补充作者没要求的内容。
+3. reply 用一句话说明你改了什么，不要复述整个方案。
+
+输出一个 JSON 对象，不要 markdown 代码块：
+{"reply":"一句话","draft":{完整方案}}`;
+
+  const compact = {
+    title: draft.title,
+    logline: draft.logline,
+    genre: draft.genre,
+    styleGuide: draft.styleGuide,
+    pov: draft.pov ?? 'third-limited',
+    povNote: draft.povNote ?? '',
+    entities: draft.entities.map((e) => ({
+      type: e.type,
+      name: e.name,
+      aliases: e.aliases ?? [],
+      summary: e.summary,
+      pinned: Boolean(e.pinned),
+    })),
+    volumes: draft.volumes.map((v) => ({ title: v.title, summary: v.summary })),
+    chapters: allowChapters
+      ? draft.chapters.map((c) => ({
+          volumeIndex: c.volumeIndex,
+          title: c.title,
+          outline: c.outline,
+        }))
+      : `${draft.chapters.length} 章（章节过多，本次不改动，原样保留）`,
+  };
+
+  const user = `## 当前方案
+${JSON.stringify(compact, null, 1)}
+
+## 作者的要求
+${instruction.trim()}
+
+## 补充说明
+${
+  allowChapters
+    ? '可以增删章节；chapterCount 变化时要保持 volumeIndex 合法（0 到 volumes.length-1）。'
+    : '本次只允许修改书名、简介、题材、文风、视角、设定条目与卷；chapters 原样返回，不要改动。'
+}`;
+
+  return { system, user };
+}
+
+/** 解析精修结果；只取允许改动的字段 */
+export function parseRefine(raw: string, allowChapters: boolean): RefineResult | null {
+  let o: Record<string, unknown>;
+  try {
+    o = parseObject(raw);
+  } catch {
+    return null;
+  }
+
+  const inner = o.draft;
+  if (!inner || typeof inner !== 'object') return null;
+  const src = inner as Record<string, unknown>;
+
+  const patch: Partial<NovelDraft> = {};
+
+  const title = str(src.title).slice(0, 60);
+  if (title) patch.title = title;
+  patch.logline = str(src.logline).slice(0, 300);
+  patch.genre = str(src.genre).slice(0, 40);
+  patch.styleGuide = str(src.styleGuide).slice(0, 1000);
+
+  const pov = normalizePov(src.pov);
+  if (pov) patch.pov = pov;
+  patch.povNote = str(src.povNote).slice(0, 500);
+
+  const entities = normalizeEntities(src.entities);
+  if (entities.length > 0) patch.entities = entities;
+
+  const volumes = normalizeVolumes(src.volumes);
+  if (volumes.length > 0) patch.volumes = volumes;
+
+  if (allowChapters) {
+    const chapters = normalizeChapters(src.chapters, Math.max(1, patch.volumes?.length ?? 1));
+    if (chapters.length > 0) patch.chapters = chapters;
+  }
+
+  return { reply: str(o.reply).slice(0, 200) || '已按你的要求调整。', patch };
+}

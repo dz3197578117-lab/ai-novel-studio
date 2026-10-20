@@ -25,6 +25,8 @@ import {
   parseSkeleton,
   parseTitleBatch,
   parseVolumeChapters,
+  parseRefine,
+  buildRefinePrompt,
   renumberChapterTitle,
   volumeCountFor,
 } from '../ai/draft.js';
@@ -874,6 +876,71 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({
       counts: { volumes: volumeIds.length, chapters: count },
     });
+  });
+
+  /**
+   * 按作者的一句话要求局部改方案。
+   * 和「重新生成」不同：没提到的字段必须原样保留，作者手动改过的地方不能被冲掉。
+   */
+  app.post('/api/ai/refine-draft', async (req, reply) => {
+    const body = req.body as { draft?: unknown; instruction?: unknown } | undefined;
+    const parsed = novelDraftSchema.safeParse(body?.draft);
+    const instruction = String(body?.instruction ?? '').trim();
+
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid_input', message: '方案数据不完整' });
+    }
+    if (!instruction) {
+      return reply.code(400).send({ error: 'invalid_input', message: '说一下要改什么' });
+    }
+    if (instruction.length > 1000) {
+      return reply.code(400).send({
+        error: 'invalid_input',
+        message: '一次改一件事，说明控制在 1000 字以内',
+      });
+    }
+
+    let config;
+    try {
+      config = loadTextConfig();
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(412).send({ error: 'not_configured', message: e.message });
+      }
+      throw e;
+    }
+
+    const draft = parsed.data as NovelDraft;
+    // 章数太多时不让模型碰章节：整份 JSON 进上下文会超限，也更容易改乱
+    const allowChapters = draft.chapters.length <= 60;
+    const prompt = buildRefinePrompt(draft, instruction, allowChapters);
+
+    try {
+      const raw = await completeAccumulated(
+        config,
+        [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        { maxTokens: 4000, signal: AbortSignal.timeout(90_000) },
+      );
+
+      const result = parseRefine(raw, allowChapters);
+      if (!result) {
+        return reply.code(502).send({
+          error: 'refine_failed',
+          message: '模型没有返回可用的修改结果，请重试。',
+        });
+      }
+      return result;
+    } catch (e) {
+      if (e instanceof AiError) {
+        return reply.code(502).send({ error: 'refine_failed', message: e.message });
+      }
+      return reply
+        .code(502)
+        .send({ error: 'refine_failed', message: `调整失败：${(e as Error).message}` });
+    }
   });
 
   /** 把确认后的方案落库成一部真正的作品 */
