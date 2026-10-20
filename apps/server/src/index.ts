@@ -21,6 +21,8 @@ import { knowledgeRoutes } from './routes/knowledge.routes.js';
 import { dshRoutes } from './routes/dsh.routes.js';
 import { planRoutes } from './routes/plan.routes.js';
 import { updateRoutes } from './routes/update.routes.js';
+import { factRoutes } from './routes/facts.routes.js';
+import { constraintRoutes } from './routes/constraints.routes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,6 +78,8 @@ export async function buildServer() {
   await app.register(dshRoutes);
   await app.register(planRoutes);
   await app.register(updateRoutes);
+  await app.register(factRoutes);
+  await app.register(constraintRoutes);
 
   app.get('/api/health', async () => ({ ok: true, dataDir: DATA_DIR }));
 

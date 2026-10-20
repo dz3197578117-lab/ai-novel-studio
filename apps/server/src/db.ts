@@ -197,6 +197,27 @@ function migrate(d: DatabaseSync): void {
     version = 4;
   }
 
+  if (version < 5) {
+    // 写前列事实清单 + 一致性检查沉淀的写作约束
+    if (!hasColumn(d, 'chapters', 'facts')) {
+      d.exec(`ALTER TABLE chapters ADD COLUMN facts TEXT NOT NULL DEFAULT '[]';`);
+    }
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS writing_constraints (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        text TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'high',
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_constraints_project ON writing_constraints(project_id, status);
+    `);
+    version = 5;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
     d.exec('COMMIT');
   } catch (e) {

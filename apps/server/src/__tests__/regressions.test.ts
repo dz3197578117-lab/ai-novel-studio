@@ -13,9 +13,12 @@ process.env.NOVELFORGE_DATA_DIR = dataDir;
 
 const { getDb, transaction } = await import('../db.js');
 const { buildContext } = await import('../ai/context.js');
+const { parseFactPoints } = await import('../ai/facts.js');
 const { createProject, getProject, listProjects } = await import('../repos/projects.repo.js');
-const { createChapter, setChapterSummary, listPriorSummaries } = await import(
-  '../repos/chapters.repo.js'
+const { createChapter, getChapter, setChapterFacts, setChapterSummary, listPriorSummaries } =
+  await import('../repos/chapters.repo.js');
+const { addConstraints, listOpenConstraints, setConstraintStatus } = await import(
+  '../repos/constraints.repo.js'
 );
 const { createDoc, searchKnowledge } = await import('../repos/layers.repo.js');
 const { profileInput } = await import('../routes/schemas.js');
@@ -128,4 +131,70 @@ test('知识库检索不会把 % 和 _ 当成 SQL 通配符', () => {
   const hits = searchKnowledge(p.id, '%', 5);
   assert.equal(hits.length, 1, '只应命中真正含 % 的那一段');
   assert.ok(hits[0]!.text.includes('%'));
+});
+
+// ───────────── 写前事实清单 + 写作约束回灌 ─────────────
+
+test('迁移 v5：章节的 facts 默认是空数组', () => {
+  const p = createProject({ title: 'facts 默认' });
+  const c = createChapter(p.id, { title: '第一章' });
+  assert.deepEqual(c.facts, []);
+});
+
+test('事实清单解析容忍代码块与前后废话', () => {
+  const pts = parseFactPoints(
+    '好的，以下是核查点：\n```json\n{"points":[{"point":"皇子称谓","query":"殿下 称谓","mustHave":true}]}\n```',
+  );
+  assert.equal(pts.length, 1);
+  assert.equal(pts[0]!.point, '皇子称谓');
+  assert.equal(pts[0]!.query, '殿下 称谓');
+  assert.equal(pts[0]!.mustHave, true);
+});
+
+test('事实清单的 query 会检索到资料并进入上下文', () => {
+  const p = createProject({ title: '事实检索' });
+  createDoc(p.id, { title: '制度备忘', content: '明代京畿设顺天府，不称京兆府。' });
+  const c = createChapter(p.id, { title: '第一章', outline: '沈砚入京' });
+  setChapterFacts(c.id, [{ point: '京畿府名', query: '顺天府 京兆府', mustHave: true }]);
+
+  const ctx = buildContext({
+    project: getProject(p.id)!,
+    chapter: getChapter(c.id)!,
+    mode: 'continue',
+  });
+  assert.ok(ctx.system.includes('顺天府'), '资料应被检索到');
+  assert.ok(
+    ctx.memoryUsed.some((m) => m.label.includes('按事实清单检索')),
+    '记忆使用里应标明是按事实清单检索的',
+  );
+});
+
+test('写作约束按文本去重，并注入后续生成', () => {
+  const p = createProject({ title: '约束去重' });
+  const first = addConstraints(p.id, null, [{ text: '主角不得自称本王' }]);
+  const again = addConstraints(p.id, null, [{ text: '主角不得自称本王' }]);
+  assert.equal(first, 1);
+  assert.equal(again, 0, '重复检查不应堆积相同约束');
+
+  const c = createChapter(p.id, { title: '第一章', outline: '入京' });
+  const ctx = buildContext({
+    project: getProject(p.id)!,
+    chapter: c,
+    mode: 'continue',
+  });
+  assert.ok(ctx.system.includes('主角不得自称本王'));
+  assert.ok(ctx.system.includes('此前检查发现的问题'));
+});
+
+test('标记已解决的约束不再进入上下文', () => {
+  const p = createProject({ title: '约束解决' });
+  addConstraints(p.id, null, [{ text: '这条已经改掉了' }]);
+  const [c1] = listOpenConstraints(p.id);
+  assert.ok(c1);
+  setConstraintStatus(c1!.id, 'resolved');
+  assert.equal(listOpenConstraints(p.id).length, 0);
+
+  const ch = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: ch, mode: 'continue' });
+  assert.ok(!ctx.system.includes('这条已经改掉了'));
 });

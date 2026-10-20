@@ -127,6 +127,8 @@ export interface Chapter extends Timestamped {
   summary: string;
   /** 细纲：把本章大纲拆成逐拍的动作/冲突（Markdown） */
   beats?: string;
+  /** 写作前归纳的待核实事实点，生成时用来检索作者资料 */
+  facts?: FactPoint[];
 }
 
 // ─────────────────────────── AI 配置与生成 ───────────────────────────
@@ -370,6 +372,8 @@ export interface ConsistencyReport {
     timeline: number;
   };
   createdAt: string;
+  /** 本次检查有多少条 high 级问题被沉淀为「写作约束」（不重复计数） */
+  syncedConstraints?: number;
 }
 
 // ─────────────────────────── AI 生成整本小说 ───────────────────────────
@@ -515,6 +519,41 @@ export interface UpdateInfo {
   repo: string | null;
   checkedAt: string;
   message?: string;
+}
+
+/** 需要在本章核实的事实点 */
+export interface FactPoint {
+  /** 一句话说明要核实什么，如「明代皇子称谓」 */
+  point: string;
+  /** 拿去检索知识库的关键词 */
+  query: string;
+  /** 是否属于「写错就是硬伤」的必查项 */
+  mustHave?: boolean;
+}
+
+/** 写作前的事实核查单 */
+export interface FactSheet {
+  points: FactPoint[];
+  /** 知识库命中片段；同一段资料可能同时回答多个事实点，所以用数组 */
+  hits: {
+    forPoints: string[];
+    docTitle: string;
+    source: string;
+    text: string;
+  }[];
+  generatedAt: string;
+}
+
+/** 一致性检查沉淀下来的写作约束：下一章起生效，直到标记已解决 */
+export interface WritingConstraint {
+  id: ID;
+  projectId: ID;
+  chapterId: ID | null;
+  text: string;
+  severity: IssueSeverity;
+  status: 'open' | 'resolved';
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ─────────────────────────── 导出 ───────────────────────────

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNovel } from '../store/novel';
 import { api } from '../api/client';
-import type { Chapter, Scene } from '@novelforge/shared';
+import type { Chapter, FactPoint, FactSheet, Scene, WritingConstraint } from '@novelforge/shared';
 
 /**
  * 编辑区本地状态快照。
@@ -64,6 +64,23 @@ function clearLocalDraft(chapterId: string): void {
   }
 }
 
+/**
+ * 取资料片段的「关键词附近」而不是开头 80 字。
+ * 同一份资料可能同时回答几个事实点，截开头会让每条看起来一模一样。
+ */
+function snippetAround(text: string, query: string, len = 80): string {
+  const terms = query.split(/\s+/).filter(Boolean);
+  for (const t of terms) {
+    const i = text.indexOf(t);
+    if (i >= 0) {
+      const start = Math.max(0, i - 24);
+      const end = Math.min(text.length, start + len);
+      return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`;
+    }
+  }
+  return `${text.slice(0, len)}${text.length > len ? '…' : ''}`;
+}
+
 /** 中间：章节正文编辑器 */
 export function Editor() {
   const chapter = useNovel((s) => s.currentChapter);
@@ -87,6 +104,16 @@ export function Editor() {
   const [layerBusy, setLayerBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // 写前事实核查
+  const [facts, setFacts] = useState<FactPoint[]>([]);
+  const [factSheet, setFactSheet] = useState<FactSheet | null>(null);
+  const [factBusy, setFactBusy] = useState(false);
+  const [showFacts, setShowFacts] = useState(false);
+
+  // 一致性检查沉淀下来的写作约束
+  const [constraints, setConstraints] = useState<WritingConstraint[]>([]);
+  const [showConstraints, setShowConstraints] = useState(false);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fictionRef = useRef<HTMLTextAreaElement | null>(null);
@@ -156,11 +183,37 @@ export function Editor() {
       .then(setScenes)
       .catch(() => setScenes([]));
 
+    // 事实清单随章节切换重置（命中资料不落库，切回来要重新生成才有）
+    setFacts(chapter.facts ?? []);
+    setFactSheet(null);
+    setShowFacts(false);
+
     // 切章后回到顶部
     const el = fictionRef.current;
     if (el) el.scrollTop = 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chapter?.id]);
+
+  // 写作约束：每次切章重新拉一次，一致性检查刚跑完再回来就能看到
+  useEffect(() => {
+    const pid = chapter?.projectId;
+    if (!pid) {
+      setConstraints([]);
+      return;
+    }
+    let alive = true;
+    api
+      .get<WritingConstraint[]>(`/api/projects/${pid}/constraints`)
+      .then((list) => {
+        if (alive) setConstraints(list);
+      })
+      .catch(() => {
+        if (alive) setConstraints([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [chapter?.id, chapter?.projectId]);
 
   // 自动保存（1.2s 防抖）
   useEffect(() => {
@@ -282,6 +335,33 @@ export function Editor() {
       setError(`保存失败，内容已暂存在本地：${(e as Error).message}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** 写前列事实清单：先让模型说要核实什么，再逐条检索资料 */
+  async function genFacts() {
+    if (!chapter) return;
+    setFactBusy(true);
+    setError(null);
+    try {
+      const sheet = await api.post<FactSheet>(`/api/chapters/${chapter.id}/facts`);
+      setFactSheet(sheet);
+      setFacts(sheet.points);
+      setShowFacts(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setFactBusy(false);
+    }
+  }
+
+  /** 标记写作约束已解决：之后生成不再注入 */
+  async function resolveConstraint(id: string) {
+    try {
+      await api.patch<{ ok: boolean }>(`/api/constraints/${id}`, { status: 'resolved' });
+      setConstraints((prev) => prev.filter((c) => c.id !== id));
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
 
@@ -407,6 +487,55 @@ export function Editor() {
 
       <div className="editor-body">
         <div className="editor-inner">
+          {constraints.length > 0 && (
+            <div
+              style={{
+                border: '1px solid var(--border)',
+                borderLeft: '3px solid var(--accent)',
+                borderRadius: 6,
+                padding: '8px 10px',
+                marginBottom: 12,
+                background: 'var(--accent-soft)',
+                fontSize: 12,
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
+                <span>⚑ {constraints.length} 条写作约束生效中（来自一致性检查）</span>
+                <button
+                  className="ghost"
+                  style={{ padding: '2px 8px', fontSize: 11 }}
+                  onClick={() => setShowConstraints((v) => !v)}
+                >
+                  {showConstraints ? '收起' : '查看'}
+                </button>
+              </div>
+              {showConstraints && (
+                <ul style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.8 }}>
+                  {constraints.map((c) => (
+                    <li key={c.id} style={{ marginBottom: 4 }}>
+                      <span>{c.text}</span>
+                      <button
+                        className="ghost"
+                        style={{ marginLeft: 8, padding: '0 6px', fontSize: 11 }}
+                        onClick={() => void resolveConstraint(c.id)}
+                        title="标记已解决，之后生成不再带这条"
+                      >
+                        已解决
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           <div className="field" style={{ marginBottom: 0 }}>
             <label style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span>本章大纲（AI 写作依据，也用于长期记忆）</span>
@@ -428,6 +557,63 @@ export function Editor() {
                 markEdit({ outline: e.target.value });
               }}
             />
+          </div>
+
+          {/* 写前事实核查：AI 先说清要核实什么，再检索资料 */}
+          <div className="field" style={{ marginBottom: 0, marginTop: 10 }}>
+            <label style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+              <span>
+                写前查资料
+                {facts.length > 0 && (
+                  <span className="hint" style={{ marginLeft: 6 }}>
+                    {facts.length} 条待核实
+                  </span>
+                )}
+              </span>
+              <span style={{ display: 'flex', gap: 4 }}>
+                {facts.length > 0 && (
+                  <button className="count-chip" onClick={() => setShowFacts((v) => !v)}>
+                    {showFacts ? '收起' : '查看'}
+                  </button>
+                )}
+                <button
+                  className="count-chip"
+                  onClick={() => void genFacts()}
+                  disabled={factBusy}
+                  title="让 AI 列出本章需要核实的史实/设定点，并检索你上传的资料"
+                >
+                  {factBusy ? '分析中…' : facts.length ? '重新生成' : 'AI 列事实清单'}
+                </button>
+              </span>
+            </label>
+
+            {showFacts && facts.length > 0 && (
+              <div className="plan-result" style={{ marginTop: 6 }}>
+                <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.9 }}>
+                  {facts.map((f, i) => (
+                    <li key={`${f.point}-${i}`}>
+                      {f.mustHave && <b style={{ color: 'var(--accent)' }}>必查 </b>}
+                      {f.point}
+                      {factSheet?.hits
+                        .filter((h) => h.forPoints.includes(f.point))
+                        .map((h, j) => (
+                          <div
+                            key={j}
+                            style={{ fontSize: 11, opacity: 0.8, marginTop: 2, lineHeight: 1.6 }}
+                          >
+                            资料：{h.docTitle}
+                            {h.source ? ` · ${h.source}` : ''} —{' '}
+                            {snippetAround(h.text, f.query)}
+                          </div>
+                        ))}
+                    </li>
+                  ))}
+                </ul>
+                <div className="hint" style={{ marginTop: 6 }}>
+                  这些点会用来检索你的资料库，写正文时自动带进上下文。
+                </div>
+              </div>
+            )}
           </div>
 
           {/* 规划区（细纲 / 场景卡 / AI 整改）默认收起 */}

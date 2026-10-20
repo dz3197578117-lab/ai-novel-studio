@@ -2,6 +2,7 @@ import type { Chapter, MemoryUsage, Project, WriteMode } from '@novelforge/share
 import { listPinnedEntities } from '../repos/entities.repo.js';
 import { listPriorSummaries, listVolumes } from '../repos/chapters.repo.js';
 import { listOpenForeshadows, listTimeline } from '../repos/consistency.repo.js';
+import { listOpenConstraints } from '../repos/constraints.repo.js';
 import { listScenes, searchKnowledge } from '../repos/layers.repo.js';
 import { scenesToText } from './layers.js';
 
@@ -61,6 +62,7 @@ export function buildContext(params: {
    */
   const REQUIRED_CAP = {
     rules: 6000,
+    constraints: 1500,
     outline: 4000,
     beats: 3000,
     scenes: 2000,
@@ -103,6 +105,21 @@ export function buildContext(params: {
   const rulesBlock = required('作者硬约束', project.rules ?? '', REQUIRED_CAP.rules);
   if (rulesBlock) {
     blocks.push(`## 作者硬约束（必须遵守，违反即算写错）\n${rulesBlock}`);
+  }
+
+  // 0.1 一致性检查沉淀下来的约束：上一轮错过的，本轮别再犯
+  const openConstraints = listOpenConstraints(project.id, 6);
+  if (openConstraints.length > 0) {
+    const constraintsBlock = required(
+      '写作约束',
+      openConstraints.map((c) => `- ${c.text}`).join('\n'),
+      REQUIRED_CAP.constraints,
+    );
+    if (constraintsBlock) {
+      blocks.push(
+        `## 此前检查发现的问题（本章必须避免重复，也不要与之矛盾）\n${constraintsBlock}`,
+      );
+    }
   }
 
   // 1. 本章任务：大纲 → 细纲 → 场景（必选项，最先占预算）
@@ -209,7 +226,12 @@ export function buildContext(params: {
   }
 
   // 4. 作者资料（引用溯源：明确标出来自哪份资料）
-  const hits = searchKnowledge(project.id, `${chapter.title} ${chapter.outline.slice(0, 200)}`, 3);
+  //    优先用「写前事实清单」的关键词检索——比标题+大纲召回的覆盖面大得多
+  const factQueries = (chapter.facts ?? []).map((f) => f.query).filter(Boolean);
+  const knowledgeQuery = factQueries.length
+    ? factQueries.join(' ').slice(0, 600)
+    : `${chapter.title} ${chapter.outline.slice(0, 200)}`;
+  const hits = searchKnowledge(project.id, knowledgeQuery, 3);
   if (hits.length > 0) {
     const lines = hits.map(
       (h) => `- 〔${h.docTitle}${h.source ? ` · ${h.source}` : ''}〕${h.text.slice(0, 300)}`,
@@ -222,7 +244,9 @@ export function buildContext(params: {
       );
       memoryUsed.push({
         kind: 'entity',
-        label: `${hits.length} 条资料引用`,
+        label: factQueries.length
+          ? `${hits.length} 条资料引用（按事实清单检索）`
+          : `${hits.length} 条资料引用`,
         chars: joined.length,
       });
     }

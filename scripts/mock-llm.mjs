@@ -90,6 +90,15 @@ const DRAFT_SAMPLE = {
   ],
 };
 
+/** 模拟「写前列事实清单」的返回 */
+const FACT_SAMPLE = {
+  points: [
+    { point: '明代皇子称谓与自称呼', query: '皇子 殿下 称谓', mustHave: true },
+    { point: '京畿地区在明代的府名（顺天府 vs 京兆府）', query: '顺天府 京兆府 明代', mustHave: true },
+    { point: '卫所千户的隶属与品级', query: '千户 卫所 品级', mustHave: false },
+  ],
+};
+
 const server = http.createServer((req, res) => {
   if (req.url?.endsWith('/chat/completions') && req.method === 'POST') {
     let body = '';
@@ -127,6 +136,8 @@ const server = http.createServer((req, res) => {
       const isPlanRevise = /按作者要求修改/.test(system?.content ?? '');
       const isBeatsRequest = /小说结构编辑/.test(system?.content ?? '');
       const isScenesRequest = /小说场景设计师/.test(system?.content ?? '');
+      // 写前列事实清单
+      const isFactRequest = /长篇小说的资料员/.test(system?.content ?? '');
       const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
       // 对话式访谈：第一轮反问，第二轮给结论
       const isInterviewRequest = /小说策划助手/.test(system?.content ?? '');
@@ -140,7 +151,9 @@ const server = http.createServer((req, res) => {
       );
 
       let content = SAMPLE.join('');
-      if (isPlanAsk) {
+      if (isFactRequest) {
+        content = JSON.stringify(FACT_SAMPLE);
+      } else if (isPlanAsk) {
         content =
           '这一章的问题在结尾：钩子太弱，读者没有翻页动力。\n' +
           '建议把「系统提示猎手将至」提前到中间，让读者提前知道危险，结尾再抛一个具体威胁。';
@@ -257,9 +270,11 @@ const server = http.createServer((req, res) => {
         Connection: 'keep-alive',
       });
 
+      // 按片段流式吐出 content（各分支的 JSON 也要能流出来，否则解析类接口测不了）
+      const pieces = content.match(/[\s\S]{1,24}/g) ?? [''];
       let i = 0;
       const timer = setInterval(() => {
-        if (i >= SAMPLE.length) {
+        if (i >= pieces.length) {
           clearInterval(timer);
           res.write(
             `data: ${JSON.stringify({
@@ -272,10 +287,10 @@ const server = http.createServer((req, res) => {
           return;
         }
         res.write(
-          `data: ${JSON.stringify({ choices: [{ delta: { content: SAMPLE[i] } }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: pieces[i] } }] })}\n\n`,
         );
         i++;
-      }, 60);
+      }, 20);
 
       // 注意：必须监听 res 的 close，而不是 req 的 close。
       // Node 新版在请求体读完后就会触发 req 'close'，会立刻清掉定时器。

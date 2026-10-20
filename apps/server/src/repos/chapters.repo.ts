@@ -1,4 +1,4 @@
-import type { Chapter, ChapterStatus, ChapterSummary, ID, Volume } from '@novelforge/shared';
+import type { Chapter, ChapterStatus, ChapterSummary, FactPoint, ID, Volume } from '@novelforge/shared';
 import { countWords, getDb, newId, nowIso } from '../db.js';
 
 interface VolumeRow {
@@ -23,6 +23,7 @@ interface ChapterRow {
   word_count: number;
   summary: string;
   beats: string | null;
+  facts: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -49,9 +50,24 @@ const toChapter = (r: ChapterRow): Chapter => ({
   wordCount: r.word_count,
   summary: r.summary,
   beats: r.beats ?? '',
+  facts: parseFacts(r.facts),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
+
+/** facts 列存 JSON；解析失败当作空，不让脏数据拖垮整个章节读取 */
+function parseFacts(raw: string | null): FactPoint[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!Array.isArray(v)) return [];
+    return v
+      .filter((x): x is FactPoint => Boolean(x) && typeof (x as FactPoint).point === 'string')
+      .slice(0, 20);
+  } catch {
+    return [];
+  }
+}
 
 /** 章节摘要行：显式不含 content，避免把整本书正文读进内存 */
 type ChapterSummaryRow = Pick<
@@ -230,6 +246,13 @@ export function setChapterSummary(id: ID, summary: string): void {
   getDb()
     .prepare('UPDATE chapters SET summary=?, updated_at=? WHERE id=?')
     .run(summary, nowIso(), id);
+}
+
+/** 写入本章的事实核查点（写作时据此检索资料） */
+export function setChapterFacts(id: ID, facts: FactPoint[]): void {
+  getDb()
+    .prepare('UPDATE chapters SET facts=?, updated_at=? WHERE id=?')
+    .run(JSON.stringify(facts.slice(0, 20)), nowIso(), id);
 }
 
 export function deleteChapter(id: ID): boolean {

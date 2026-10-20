@@ -13,6 +13,7 @@ import {
 import { listChapters, getChapter } from '../repos/chapters.repo.js';
 import { listEntities } from '../repos/entities.repo.js';
 import { listDocs } from '../repos/layers.repo.js';
+import { addConstraints } from '../repos/constraints.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { buildConsistencyPrompt, parseConsistencyReport } from '../ai/consistency.js';
@@ -139,7 +140,24 @@ export async function consistencyRoutes(app: FastifyInstance): Promise<void> {
           },
         );
         const report: ConsistencyReport = parseConsistencyReport(content, prompt.scope);
-        return report;
+
+        /**
+         * 把 high 级问题沉淀成「写作约束」，下一次生成正文时自动注入。
+         * 检查不该只是一份看完就忘的报告——它得影响下一章怎么写。
+         */
+        const high = report.issues.filter((i) => i.severity === 'high');
+        const synced = high.length
+          ? addConstraints(
+              project.id,
+              null,
+              high.map((i) => ({
+                text: `${i.title}${i.suggestion ? `｜建议：${i.suggestion}` : ''}`.slice(0, 400),
+                severity: 'high' as const,
+              })),
+            )
+          : 0;
+
+        return { ...report, syncedConstraints: synced };
       } catch (e) {
         if (e instanceof AiError) {
           return reply.code(502).send({ error: 'check_failed', message: e.message });
