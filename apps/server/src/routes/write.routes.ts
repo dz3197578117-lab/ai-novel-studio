@@ -50,6 +50,14 @@ export async function writeRoutes(app: FastifyInstance): Promise<void> {
       reply.raw.write(`data: ${JSON.stringify(ev)}\n\n`);
     };
 
+    /**
+     * 心跳：推理模型可能几十秒不吐第一个字，中间的代理/浏览器会把「无数据」的连接掐掉。
+     * SSE 注释帧不会被前端解析成事件（前端只认 data: 行）。
+     */
+    const heartbeat = setInterval(() => {
+      if (!reply.raw.writableEnded) reply.raw.write(': ping\n\n');
+    }, 15_000);
+
     const controller = new AbortController();
     // 注意：必须监听响应流的 close，而不是 req.raw.
     // Node 新一代中 IncomingMessage 的 'close' 在请求体读完后即触发，
@@ -84,6 +92,7 @@ export async function writeRoutes(app: FastifyInstance): Promise<void> {
         send({ type: 'error', message: (e as Error).message });
       }
     } finally {
+      clearInterval(heartbeat);
       reply.raw.end();
     }
   });

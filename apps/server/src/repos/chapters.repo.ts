@@ -178,6 +178,35 @@ export function listChaptersWithContent(projectId: ID, ids?: ID[]): Chapter[] {
   return rows.map(toChapter);
 }
 
+/**
+ * 只取「目录/规划」需要的列，正文固定为空串。
+ *
+ * 一致性检查、补大纲、整改这些链路只需要标题/大纲/摘要，
+ * 以前用 listChapters().map(getChapter) 会把每一章正文都读进内存（1000 章可达几十 MB），
+ * 而且每章一次查询。
+ */
+export function listChapterDigests(projectId: ID): Chapter[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, project_id, volume_id, title, sort_order, outline, '' AS content,
+              status, word_count, summary, beats, facts, pov, created_at, updated_at
+       FROM chapters WHERE project_id = ? ORDER BY sort_order, created_at`,
+    )
+    .all(projectId) as unknown as ChapterRow[];
+  return rows.map(toChapter);
+}
+
+/** 全书最后一章的正文（一致性检查只判断「当下写法」，不需要全部正文） */
+export function getLastChapterContent(projectId: ID): string {
+  const row = getDb()
+    .prepare(
+      `SELECT content FROM chapters WHERE project_id = ?
+       ORDER BY sort_order DESC, created_at DESC LIMIT 1`,
+    )
+    .get(projectId) as { content: string } | undefined;
+  return row?.content ?? '';
+}
+
 export function getChapter(id: ID): Chapter | null {
   const row = getDb().prepare('SELECT * FROM chapters WHERE id = ?').get(id) as
     | ChapterRow

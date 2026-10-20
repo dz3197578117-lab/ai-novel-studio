@@ -774,6 +774,8 @@ export function buildRefinePrompt(
     styleGuide: draft.styleGuide,
     pov: draft.pov ?? 'third-limited',
     povNote: draft.povNote ?? '',
+    // body / fields 不发给模型：一份设定正文可能几千字，整份方案会撑爆上下文。
+    // 精修结果由 parseRefine 与本地方案合并，缺的字段沿用原值。
     entities: draft.entities.map((e) => ({
       type: e.type,
       name: e.name,
@@ -802,13 +804,45 @@ ${
   allowChapters
     ? '可以增删章节；chapterCount 变化时要保持 volumeIndex 合法（0 到 volumes.length-1）。'
     : '本次只允许修改书名、简介、题材、文风、视角、设定条目与卷；chapters 原样返回，不要改动。'
-}`;
+}
+
+设定条目的 body / fields 本次没有提供，**不要编造也不要清空**：
+只返回 type/name/aliases/summary/pinned，服务端会把原有正文与结构化字段原样接回去。`;
 
   return { system, user };
 }
 
-/** 解析精修结果；只取允许改动的字段 */
-export function parseRefine(raw: string, allowChapters: boolean): RefineResult | null {
+/**
+ * 把模型返回的条目按名字与本地方案合并：
+ * 名称没变的，缺的别名/字段/正文/固定状态沿用原值。
+ * 模型只拿到精简后的设定（不含 body/fields），不合并就会把它们清空。
+ */
+function mergeEntities(incoming: DraftEntity[], base: DraftEntity[]): DraftEntity[] {
+  const byName = new Map(base.map((e) => [e.name, e]));
+  return incoming.map((e) => {
+    const old = byName.get(e.name);
+    if (!old) return e;
+    return {
+      ...e,
+      aliases: e.aliases && e.aliases.length > 0 ? e.aliases : (old.aliases ?? []),
+      fields: e.fields && e.fields.length > 0 ? e.fields : (old.fields ?? []),
+      body: e.body && e.body.length > 0 ? e.body : (old.body ?? ''),
+      pinned: e.pinned === true ? true : Boolean(old.pinned),
+    };
+  });
+}
+
+/**
+ * 解析精修结果；只取允许改动的字段。
+ *
+ * 有 base 时以「作者本地已经改过的方案」为底：模型没返回的字段保持原样，
+ * 避免漏一个字段就被清空（作者手改的内容不能被冲掉）。
+ */
+export function parseRefine(
+  raw: string,
+  allowChapters: boolean,
+  base?: NovelDraft,
+): RefineResult | null {
   let o: Record<string, unknown>;
   try {
     o = parseObject(raw);
@@ -819,27 +853,39 @@ export function parseRefine(raw: string, allowChapters: boolean): RefineResult |
   const inner = o.draft;
   if (!inner || typeof inner !== 'object') return null;
   const src = inner as Record<string, unknown>;
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(src, key);
 
   const patch: Partial<NovelDraft> = {};
 
-  const title = str(src.title).slice(0, 60);
-  if (title) patch.title = title;
-  patch.logline = str(src.logline).slice(0, 300);
-  patch.genre = str(src.genre).slice(0, 40);
-  patch.styleGuide = str(src.styleGuide).slice(0, 1000);
+  if (has('title')) {
+    const title = str(src.title).slice(0, 60);
+    if (title) patch.title = title;
+  }
+  if (has('logline')) patch.logline = str(src.logline).slice(0, 300);
+  if (has('genre')) patch.genre = str(src.genre).slice(0, 40);
+  if (has('styleGuide')) patch.styleGuide = str(src.styleGuide).slice(0, 1000);
 
-  const pov = normalizePov(src.pov);
-  if (pov) patch.pov = pov;
-  patch.povNote = str(src.povNote).slice(0, 500);
+  if (has('pov')) {
+    const pov = normalizePov(src.pov);
+    if (pov) patch.pov = pov;
+  }
+  if (has('povNote')) patch.povNote = str(src.povNote).slice(0, 500);
 
-  const entities = normalizeEntities(src.entities);
-  if (entities.length > 0) patch.entities = entities;
+  if (Array.isArray(src.entities)) {
+    const entities = normalizeEntities(src.entities);
+    if (entities.length > 0) {
+      patch.entities = base ? mergeEntities(entities, base.entities) : entities;
+    }
+  }
 
-  const volumes = normalizeVolumes(src.volumes);
-  if (volumes.length > 0) patch.volumes = volumes;
+  if (Array.isArray(src.volumes)) {
+    const volumes = normalizeVolumes(src.volumes);
+    if (volumes.length > 0) patch.volumes = volumes;
+  }
 
-  if (allowChapters) {
-    const chapters = normalizeChapters(src.chapters, Math.max(1, patch.volumes?.length ?? 1));
+  if (allowChapters && Array.isArray(src.chapters)) {
+    const volumeCount = Math.max(1, patch.volumes?.length ?? base?.volumes.length ?? 1);
+    const chapters = normalizeChapters(src.chapters, volumeCount);
     if (chapters.length > 0) patch.chapters = chapters;
   }
 

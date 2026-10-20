@@ -113,17 +113,19 @@ export function AiNovelDialog({
 
   const chatRef = useRef<HTMLDivElement | null>(null);
 
-  // 打开时尝试恢复上次未建书的方案
+  // 打开时：重置对话，并恢复上次未建书的方案。
+  // 注意只能有一个 [open] 副作用——拆成两个时，后一个 setDraft(null) 会把恢复出来的方案冲掉。
   useEffect(() => {
     if (!open) return;
-    setRestored(false);
-    if (draft) return;
+    setMessages([GREETING]);
+    setInput('');
+    setReply(null);
+    setRequestedCount(null);
+    setThinking(false);
+
     const saved = loadSavedDraft();
-    if (saved) {
-      setDraft(saved);
-      setRestored(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setDraft(saved);
+    setRestored(Boolean(saved));
   }, [open]);
 
   // 方案有任何改动就落本地，避免误关丢失
@@ -157,17 +159,6 @@ export function AiNovelDialog({
     );
   }
   const chapterCount = clampCount(Number(chapterInput));
-
-  // 每次打开都从新对话开始
-  useEffect(() => {
-    if (!open) return;
-    setMessages([GREETING]);
-    setInput('');
-    setReply(null);
-    setDraft(null);
-    setRequestedCount(null);
-    setThinking(false);
-  }, [open]);
 
   // 新消息后滚到底部
   useEffect(() => {

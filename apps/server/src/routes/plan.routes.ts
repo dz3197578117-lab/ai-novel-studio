@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { AiError, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { buildPlanRevisePrompt, cleanPlanOutput } from '../ai/plan.js';
 import { buildSettingBrief } from '../ai/briefing.js';
-import { getChapter, listChapters } from '../repos/chapters.repo.js';
+import { getChapter, listChapterDigests } from '../repos/chapters.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { listOpenForeshadows } from '../repos/consistency.repo.js';
 import { planReviseInput } from './schemas.js';
@@ -42,10 +42,8 @@ export async function planRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
 
-    // 前后各取一章，保证衔接
-    const all = listChapters(project.id)
-      .map((c) => getChapter(c.id))
-      .filter((c): c is NonNullable<typeof c> => c !== null);
+    // 前后各取一章，保证衔接。只需要目录级字段，不读正文。
+    const all = listChapterDigests(project.id);
     const idx = all.findIndex((c) => c.id === chapter.id);
     const prev = idx > 0 ? all[idx - 1] ?? null : null;
     const next = idx >= 0 && idx < all.length - 1 ? all[idx + 1] ?? null : null;

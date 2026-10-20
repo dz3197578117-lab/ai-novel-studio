@@ -42,6 +42,7 @@ export function ProjectDialog({
   const [busy, setBusy] = useState(false);
   const loadProjects = useNovel((s) => s.loadProjects);
   const selectProject = useNovel((s) => s.selectProject);
+  const setError = useNovel((s) => s.setError);
 
   useEffect(() => {
     if (open) {
@@ -69,6 +70,9 @@ export function ProjectDialog({
       }
       await onSaved?.();
       onClose();
+    } catch (e) {
+      // 以前没有 catch：接口失败时对话框静默无反应，控制台只留一个未处理的 Promise
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }

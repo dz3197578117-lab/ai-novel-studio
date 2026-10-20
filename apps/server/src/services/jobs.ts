@@ -54,10 +54,12 @@ export function createJob<T>(kind: string, initial?: Partial<JobProgress>): Job<
   };
   jobs.set(job.id, job as Job<unknown>);
 
-  // 清理老任务
+  // 清理老任务。只淘汰已结束的：正在跑的任务被删掉后，前端轮询会直接 404。
   if (jobs.size > MAX_JOBS) {
-    const sorted = [...jobs.values()].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-    for (const old of sorted.slice(0, jobs.size - MAX_JOBS)) {
+    const finished = [...jobs.values()]
+      .filter((j) => j.status !== 'running')
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+    for (const old of finished.slice(0, jobs.size - MAX_JOBS)) {
       jobs.delete(old.id);
     }
   }

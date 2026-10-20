@@ -492,7 +492,12 @@ export interface TokenUsage {
 }
 
 export interface MemoryUsage {
-  kind: 'entity' | 'chapter-summary' | 'volume-summary' | 'style';
+  /**
+   * rule = 作者硬约束 / 视角守则 / 检查沉淀的约束
+   * plan = 大纲 / 细纲 / 场景卡
+   * entity = 设定、伏笔、时间线、资料引用
+   */
+  kind: 'entity' | 'chapter-summary' | 'volume-summary' | 'style' | 'rule' | 'plan';
   label: string;
   chars: number;
 }

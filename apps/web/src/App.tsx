@@ -11,7 +11,15 @@ import { ImageDialog } from './components/ImageDialog';
 import { ShelfPage } from './components/ShelfPage';
 import { ConsistencyPanel } from './components/ConsistencyPanel';
 
-type DialogKey = 'project' | 'entities' | 'settings' | 'export' | 'image' | 'consistency' | null;
+type DialogKey =
+  | 'project-new'
+  | 'project-edit'
+  | 'entities'
+  | 'settings'
+  | 'export'
+  | 'image'
+  | 'consistency'
+  | null;
 
 /** 书架（主页） / 写作台 */
 type View = 'shelf' | 'workspace';
@@ -48,8 +56,8 @@ export function App() {
       ) : (
         <div className="app">
           <Sidebar
-            onNewProject={() => setDialog('project')}
-            onEditProject={() => setDialog('project')}
+            onNewProject={() => setDialog('project-new')}
+            onEditProject={() => setDialog('project-edit')}
             onBackToShelf={() => setView('shelf')}
           />
 
@@ -66,9 +74,10 @@ export function App() {
           </div>
 
           <ProjectDialog
-            open={dialog === 'project'}
+            open={dialog === 'project-new' || dialog === 'project-edit'}
             onClose={() => setDialog(null)}
-            project={dialog === 'project' ? project : null}
+            // 只有「编辑」才把当前作品传进去；新建必须传 null，否则会变成改当前书
+            project={dialog === 'project-edit' ? project : null}
           />
           <EntityManager open={dialog === 'entities'} onClose={() => setDialog(null)} />
           <SettingsDialog open={dialog === 'settings'} onClose={() => setDialog(null)} />

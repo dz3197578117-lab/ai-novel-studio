@@ -85,26 +85,33 @@ export function buildContext(params: {
   /**
    * 必选项：一定注入，同样从预算里扣（可为 0，表示预算已经用尽）。
    * 预算用尽时不再硬塞——否则 5 万字硬约束会让整个请求超出模型上下文。
+   * kind 用于前端的「上下文构成」分类，不要一律记成 style。
    */
-  const required = (label: string, text: string, cap: number): string | null => {
+  const required = (
+    label: string,
+    text: string,
+    cap: number,
+    kind: MemoryUsage['kind'],
+  ): string | null => {
     const trimmed = text.trim();
     if (!trimmed) return null;
     const allowance = Math.min(cap, Math.max(0, remaining));
     if (allowance < 80) return null; // 剩这么点字不如不塞，免得截出半句话
 
+    const suffix = '\n…（超出可注入额度，已截断）';
     let out = trimmed;
     if (trimmed.length > allowance) {
-      out = `${trimmed.slice(0, allowance)}\n…（超出可注入额度，已截断）`;
+      out = `${trimmed.slice(0, Math.max(0, allowance - suffix.length))}${suffix}`;
     }
     remaining -= out.length;
-    memoryUsed.push({ kind: 'style', label, chars: out.length });
+    memoryUsed.push({ kind, label, chars: out.length });
     return out;
   };
 
   const blocks: string[] = [];
 
   // 0. 作者硬约束（考据规则 / 制度 / 禁令）——最高优先级
-  const rulesBlock = required('作者硬约束', project.rules ?? '', REQUIRED_CAP.rules);
+  const rulesBlock = required('作者硬约束', project.rules ?? '', REQUIRED_CAP.rules, 'rule');
   if (rulesBlock) {
     blocks.push(`## 作者硬约束（必须遵守，违反即算写错）\n${rulesBlock}`);
   }
@@ -112,7 +119,7 @@ export function buildContext(params: {
   // 0.1 叙述视角守则：设定后是硬规则，优先级仅次于作者硬约束
   const povGuide = buildPovGuide(project, chapter);
   if (povGuide) {
-    const povBlock = required('视角守则', povGuide, REQUIRED_CAP.pov);
+    const povBlock = required('视角守则', povGuide, REQUIRED_CAP.pov, 'rule');
     if (povBlock) blocks.push(`## 叙述视角（硬性规则）\n${povBlock}`);
   }
 
@@ -123,6 +130,7 @@ export function buildContext(params: {
       '写作约束',
       openConstraints.map((c) => `- ${c.text}`).join('\n'),
       REQUIRED_CAP.constraints,
+      'rule',
     );
     if (constraintsBlock) {
       blocks.push(
@@ -132,10 +140,10 @@ export function buildContext(params: {
   }
 
   // 1. 本章任务：大纲 → 细纲 → 场景（必选项，最先占预算）
-  const outlineBlock = required('本章大纲', chapter.outline, REQUIRED_CAP.outline);
+  const outlineBlock = required('本章大纲', chapter.outline, REQUIRED_CAP.outline, 'plan');
   if (outlineBlock) blocks.push(`## 本章大纲（必须遵守）\n${outlineBlock}`);
 
-  const beatsBlock = required('本章细纲', chapter.beats ?? '', REQUIRED_CAP.beats);
+  const beatsBlock = required('本章细纲', chapter.beats ?? '', REQUIRED_CAP.beats, 'plan');
   if (beatsBlock) blocks.push(`## 本章细纲（按这些节拍写，不要跳跃）\n${beatsBlock}`);
 
   const scenes = listScenes(chapter.id);
@@ -144,6 +152,7 @@ export function buildContext(params: {
       `${scenes.length} 个场景`,
       scenesToText(scenes),
       REQUIRED_CAP.scenes,
+      'plan',
     );
     if (scenesBlock) blocks.push(`## 场景安排（按顺序推进）\n${scenesBlock}`);
   }
@@ -167,75 +176,9 @@ export function buildContext(params: {
     }
   }
 
-  // 2. 未回收的伏笔（长篇一致性的核心：让模型知道哪些坑还没填）
-  const openForeshadows = listOpenForeshadows(project.id, 12);
-  if (openForeshadows.length > 0) {
-    const lines: string[] = [];
-    for (const f of openForeshadows) {
-      const line = `- ${f.title}${f.detail ? `：${f.detail.slice(0, 80)}` : ''}`;
-      if (line.length > remaining) break;
-      remaining -= line.length;
-      lines.push(line);
-    }
-    if (lines.length) {
-      memoryUsed.push({
-        kind: 'entity',
-        label: `${lines.length} 条未回收伏笔`,
-        chars: lines.join('\n').length,
-      });
-      blocks.push(
-        `## 尚未回收的伏笔（可以呼应或铺垫，但不要提前揭晓、也不要与已写内容矛盾）\n${lines.join('\n')}`,
-      );
-    }
-  }
-
-  // 3. 关键时间点（防止时间线前后矛盾）
-  const keyEvents = listTimeline(project.id)
-    .filter((t) => t.importance >= 2)
-    .slice(0, 8);
-  if (keyEvents.length > 0) {
-    const lines = keyEvents.map(
-      (t) => `- ${t.storyTime || '（未标时间）'}：${t.title}`,
-    );
-    const joined = lines.join('\n');
-    if (joined.length <= remaining) {
-      remaining -= joined.length;
-      memoryUsed.push({ kind: 'style', label: `${lines.length} 条关键时间点`, chars: joined.length });
-      blocks.push(`## 关键时间点（保持时间先后一致）\n${joined}`);
-    }
-  }
-
-  // 4. 卷摘要
-  if (chapter.volumeId) {
-    const vol = listVolumes(project.id).find((v) => v.id === chapter.volumeId);
-    const s = vol?.summary ? take('volume-summary', vol.title, vol.summary) : null;
-    if (s) blocks.push(`## 本卷概要（${vol!.title}）\n${s}`);
-  }
-
-  // 3. 前情摘要（越近越重要，倒序取）
-  const priors = listPriorSummaries(project.id, chapter.order, 30);
-  if (priors.length > 0) {
-    const picked: string[] = [];
-    for (const p of priors) {
-      const line = `- ${p.title}：${p.summary}`;
-      // 放不下就跳过这一条，继续试更早（通常更短）的摘要；
-      // 用 break 会在「最近一章摘要偏长」时把整段前情全部丢掉。
-      if (line.length > remaining) continue;
-      remaining -= line.length;
-      picked.unshift(line);
-    }
-    if (picked.length) {
-      memoryUsed.push({
-        kind: 'chapter-summary',
-        label: `前 ${picked.length} 章摘要`,
-        chars: picked.join('\n').length,
-      });
-      blocks.push(`## 前情提要（按时间顺序）\n${picked.join('\n')}`);
-    }
-  }
-
-  // 4. 作者资料（引用溯源：明确标出来自哪份资料）
-  //    优先用「写前事实清单」的关键词检索——比标题+大纲召回的覆盖面大得多
+  // 3. 作者资料（引用溯源：明确标出来自哪份资料）
+  //    放在前情摘要之前：写前事实清单查到的资料是「写错就成硬伤」的内容，
+  //    不能因为前情太长被挤掉。优先用事实点的关键词检索，召回面比标题+大纲大得多。
   const factQueries = (chapter.facts ?? []).map((f) => f.query).filter(Boolean);
   const knowledgeQuery = factQueries.length
     ? factQueries.join(' ').slice(0, 600)
@@ -261,12 +204,80 @@ export function buildContext(params: {
     }
   }
 
-  // 5. 文风（必选项）
+  // 4. 未回收的伏笔（长篇一致性的核心：让模型知道哪些坑还没填）
+  const openForeshadows = listOpenForeshadows(project.id, 12);
+  if (openForeshadows.length > 0) {
+    const lines: string[] = [];
+    for (const f of openForeshadows) {
+      const line = `- ${f.title}${f.detail ? `：${f.detail.slice(0, 80)}` : ''}`;
+      if (line.length > remaining) break;
+      remaining -= line.length;
+      lines.push(line);
+    }
+    if (lines.length) {
+      memoryUsed.push({
+        kind: 'entity',
+        label: `${lines.length} 条未回收伏笔`,
+        chars: lines.join('\n').length,
+      });
+      blocks.push(
+        `## 尚未回收的伏笔（可以呼应或铺垫，但不要提前揭晓、也不要与已写内容矛盾）\n${lines.join('\n')}`,
+      );
+    }
+  }
+
+  // 5. 关键时间点（防止时间线前后矛盾）
+  const keyEvents = listTimeline(project.id)
+    .filter((t) => t.importance >= 2)
+    .slice(0, 8);
+  if (keyEvents.length > 0) {
+    const lines = keyEvents.map(
+      (t) => `- ${t.storyTime || '（未标时间）'}：${t.title}`,
+    );
+    const joined = lines.join('\n');
+    if (joined.length <= remaining) {
+      remaining -= joined.length;
+      memoryUsed.push({ kind: 'entity', label: `${lines.length} 条关键时间点`, chars: joined.length });
+      blocks.push(`## 关键时间点（保持时间先后一致）\n${joined}`);
+    }
+  }
+
+  // 6. 卷摘要
+  if (chapter.volumeId) {
+    const vol = listVolumes(project.id).find((v) => v.id === chapter.volumeId);
+    const s = vol?.summary ? take('volume-summary', vol.title, vol.summary) : null;
+    if (s) blocks.push(`## 本卷概要（${vol!.title}）\n${s}`);
+  }
+
+  // 7. 前情摘要（越近越重要，倒序取）
+  const priors = listPriorSummaries(project.id, chapter.order, 30);
+  if (priors.length > 0) {
+    const picked: string[] = [];
+    for (const p of priors) {
+      const line = `- ${p.title}：${p.summary}`;
+      // 放不下就跳过这一条，继续试更早（通常更短）的摘要；
+      // 用 break 会在「最近一章摘要偏长」时把整段前情全部丢掉。
+      if (line.length > remaining) continue;
+      remaining -= line.length;
+      picked.unshift(line);
+    }
+    if (picked.length) {
+      memoryUsed.push({
+        kind: 'chapter-summary',
+        label: `前 ${picked.length} 章摘要`,
+        chars: picked.join('\n').length,
+      });
+      blocks.push(`## 前情提要（按时间顺序）\n${picked.join('\n')}`);
+    }
+  }
+
+  // 8. 文风（必选项）
   const style =
     required(
       '文风要求',
       project.styleGuide,
       REQUIRED_CAP.style,
+      'style',
     ) || '自然流畅的中文小说叙述，克制而具体，避免辞藻堆砌。';
   blocks.push(`## 文风要求\n${style}`);
 
@@ -286,7 +297,7 @@ export function buildContext(params: {
     .filter((s) => s !== undefined)
     .join('\n');
 
-  // 6. 用户消息：选区 / 已有正文 / 整章写作指令
+  // 9. 用户消息：选区 / 已有正文 / 整章写作指令
   const userParts: string[] = [];
   const isChapterMode = CHAPTER_MODES.includes(mode);
 

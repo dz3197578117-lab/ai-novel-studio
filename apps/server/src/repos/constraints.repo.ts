@@ -66,9 +66,15 @@ export function addConstraints(
     ).map((r) => r.text),
   );
 
+  // 同一次检查里可能出现两条一模一样的建议：既要去掉库里已有的，也要去掉本批重复的
+  const seen = new Set<string>();
   const fresh = items
     .map((i) => ({ text: i.text.trim(), severity: i.severity ?? 'high' }))
-    .filter((i) => i.text.length > 0 && !existing.has(i.text));
+    .filter((i) => {
+      if (!i.text || existing.has(i.text) || seen.has(i.text)) return false;
+      seen.add(i.text);
+      return true;
+    });
 
   if (fresh.length === 0) return 0;
 

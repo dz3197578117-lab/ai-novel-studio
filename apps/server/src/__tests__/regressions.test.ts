@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { NovelDraft } from '@novelforge/shared';
 
 /**
  * 针对本轮修复的回归测试。
@@ -14,11 +15,19 @@ process.env.NOVELFORGE_DATA_DIR = dataDir;
 const { getDb, transaction } = await import('../db.js');
 const { buildContext } = await import('../ai/context.js');
 const { parseFactPoints } = await import('../ai/facts.js');
+const { joinUrl, takeSseEvent } = await import('../ai/client.js');
 const { buildConsistencyPrompt } = await import('../ai/consistency.js');
 const { parseDraft, parseRefine } = await import('../ai/draft.js');
 const { createProject, getProject, listProjects } = await import('../repos/projects.repo.js');
-const { createChapter, getChapter, setChapterFacts, setChapterSummary, listPriorSummaries } =
-  await import('../repos/chapters.repo.js');
+const {
+  createChapter,
+  getChapter,
+  getLastChapterContent,
+  listChapterDigests,
+  setChapterFacts,
+  setChapterSummary,
+  listPriorSummaries,
+} = await import('../repos/chapters.repo.js');
 const { addConstraints, listOpenConstraints, setConstraintStatus } = await import(
   '../repos/constraints.repo.js'
 );
@@ -373,4 +382,130 @@ test('章节不多时允许精修改动章节', () => {
   const r = parseRefine(raw, true);
   assert.ok(r);
   assert.equal(r!.patch.chapters?.length, 1);
+});
+
+// ───────────── 方案精修不丢作者手动内容 ─────────────
+
+const BASE_DRAFT: NovelDraft = {
+  title: '旧书名',
+  logline: '旧简介',
+  genre: '玄幻',
+  styleGuide: '冷峻克制',
+  pov: 'third-limited',
+  povNote: '每卷最后一章切反派',
+  entities: [
+    {
+      type: 'character',
+      name: '沈砚',
+      aliases: ['砚哥'],
+      summary: '主角',
+      fields: [{ key: '年龄', value: '17' }],
+      body: '详细设定：出身寒门，左手有旧伤。',
+      pinned: true,
+    },
+  ],
+  volumes: [{ title: '第一卷', summary: '入京' }],
+  chapters: [{ volumeIndex: 0, title: '第一章', outline: '雪夜入京' }],
+};
+
+test('精修时模型没返回的字段保持原样，不被清空', () => {
+  const raw = JSON.stringify({
+    reply: '改了书名',
+    draft: { title: '新书名' },
+  });
+  const r = parseRefine(raw, false, BASE_DRAFT);
+  assert.ok(r);
+  assert.equal(r!.patch.title, '新书名');
+  assert.equal(r!.patch.logline, undefined, '未返回的简介不应被清空');
+  assert.equal(r!.patch.styleGuide, undefined);
+  assert.equal(r!.patch.povNote, undefined);
+  assert.equal(r!.patch.entities, undefined, '未返回设定时不应替换整组设定');
+});
+
+test('精修返回精简设定时，正文/结构化字段/别名/固定状态沿用原值', () => {
+  const raw = JSON.stringify({
+    reply: '改了主角摘要',
+    draft: {
+      entities: [{ type: 'character', name: '沈砚', summary: '改过的摘要' }],
+    },
+  });
+  const r = parseRefine(raw, false, BASE_DRAFT);
+  assert.ok(r);
+  const e = r!.patch.entities![0]!;
+  assert.equal(e.summary, '改过的摘要');
+  assert.equal(e.body, BASE_DRAFT.entities[0]!.body, '设定正文不能被清空');
+  assert.equal(e.fields?.length, 1, '结构化字段不能被清空');
+  assert.equal(e.aliases?.[0], '砚哥', '别名不能被清空');
+  assert.equal(e.pinned, true, '固定状态不能被清空');
+});
+
+// ───────────── 模型端点拼接 / SSE 分帧 ─────────────
+
+test('粘贴完整 /chat/completions 地址时，模型列表仍拼到 /v1/models', () => {
+  assert.equal(
+    joinUrl('https://api.deepseek.com/v1/chat/completions', '/models'),
+    'https://api.deepseek.com/v1/models',
+  );
+  assert.equal(
+    joinUrl('https://api.deepseek.com/v1/chat/completions', '/chat/completions'),
+    'https://api.deepseek.com/v1/chat/completions',
+  );
+  assert.equal(
+    joinUrl('https://api.deepseek.com/v1/models', '/chat/completions'),
+    'https://api.deepseek.com/v1/chat/completions',
+  );
+  assert.equal(
+    joinUrl('https://api.deepseek.com/v1/', '/chat/completions'),
+    'https://api.deepseek.com/v1/chat/completions',
+  );
+});
+
+test('SSE 同时支持 LF 与 CRLF 分帧，半帧不误判', () => {
+  assert.equal(takeSseEvent('data: 不完整'), null);
+  assert.deepEqual(takeSseEvent('data: a\n\ndata: b\n\n'), {
+    raw: 'data: a',
+    rest: 'data: b\n\n',
+  });
+  assert.deepEqual(takeSseEvent('data: a\r\n\r\ndata: b\r\n\r\n'), {
+    raw: 'data: a',
+    rest: 'data: b\r\n\r\n',
+  });
+});
+
+// ───────────── 目录查询不把正文读进内存 ─────────────
+
+test('listChapterDigests 不含正文，最后章正文单独取', () => {
+  const p = createProject({ title: '摘要查询' });
+  const c1 = createChapter(p.id, { title: '第一章', content: '甲'.repeat(120) });
+  const c2 = createChapter(p.id, { title: '第二章', content: '乙'.repeat(80) });
+
+  const digests = listChapterDigests(p.id);
+  assert.equal(digests.length, 2);
+  assert.ok(digests.every((c) => c.content === ''), '目录查询不应带正文');
+  assert.equal(digests[0]!.outline, c1.outline);
+  assert.equal(getLastChapterContent(p.id), c2.content);
+});
+
+// ───────────── 上下文用量分类 ─────────────
+
+test('上下文用量按规则/规划/文风分类，而不是一律算作文风', () => {
+  const p = createProject({ title: '用量分类', rules: '不得自称本王', styleGuide: '冷峻' });
+  const c = createChapter(p.id, { title: '第一章', outline: '入京' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+
+  assert.equal(ctx.memoryUsed.find((m) => m.label === '作者硬约束')?.kind, 'rule');
+  assert.equal(ctx.memoryUsed.find((m) => m.label === '本章大纲')?.kind, 'plan');
+  assert.equal(ctx.memoryUsed.find((m) => m.label === '文风要求')?.kind, 'style');
+});
+
+// ───────────── 约束批内去重 ─────────────
+
+test('同一次检查里的重复约束只落一条', () => {
+  const p = createProject({ title: '批内去重' });
+  const n = addConstraints(p.id, null, [
+    { text: '主称呼前后不一致' },
+    { text: '主称呼前后不一致' },
+  ]);
+  assert.equal(n, 1);
+  assert.equal(listOpenConstraints(p.id).filter((c) => c.text === '主称呼前后不一致').length, 1);
 });

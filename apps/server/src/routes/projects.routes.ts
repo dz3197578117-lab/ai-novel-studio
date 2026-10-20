@@ -11,7 +11,7 @@ import {
   listProjectsOverview,
   updateProject,
 } from '../repos/projects.repo.js';
-import { listChapters, getChapter, listVolumes } from '../repos/chapters.repo.js';
+import { listChaptersWithContent, listVolumes } from '../repos/chapters.repo.js';
 import { listEntities } from '../repos/entities.repo.js';
 import { archiveDeleted } from '../repos/backup.js';
 import { projectInput } from './schemas.js';
@@ -59,9 +59,8 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (!project) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
 
     // 删除前完整留档，误删还能从 data/backups 找回
-    const chapters = listChapters(project.id)
-      .map((c) => getChapter(c.id))
-      .filter(Boolean);
+    // 一条查询取完正文（留档需要完整内容），避免逐章 N+1
+    const chapters = listChaptersWithContent(project.id);
     archiveDeleted('project', {
       deletedAt: new Date().toISOString(),
       project,

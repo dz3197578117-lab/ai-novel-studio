@@ -247,6 +247,9 @@ export function deleteDoc(id: ID): boolean {
 /**
  * 关键词检索：中文按 2-gram 切分，英文按单词。
  * 没有向量模型也能用，够本地单人资料库的场景。
+ *
+ * 注意 LIKE '%词%' 用不上索引，所以先用较少的 probe 粗筛，再在内存里算分：
+ * probe 按词长倒序取——长词更能区分文档，短 2-gram 命中面太宽。
  */
 export function searchKnowledge(projectId: ID, query: string, limit = 5): KnowledgeHit[] {
   const q = query.trim();
@@ -264,39 +267,50 @@ export function searchKnowledge(projectId: ID, query: string, limit = 5): Knowle
    * 之前是把该项目下全部片段拉出来逐条 includes —— 资料库一大，
    * 每次续写都要 hydrate 上万行并阻塞事件循环。
    */
-  const probes = [...terms].slice(0, 40);
+  const probes = [...terms].sort((a, b) => b.length - a.length).slice(0, 24);
   const esc = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
   const where = probes.map(() => `c.text LIKE ? ESCAPE '\\'`).join(' OR ');
 
   const rows = getDb()
     .prepare(
-      `SELECT c.*, d.title AS doc_title, d.source AS doc_source
+      `SELECT c.doc_id, c.chunk_index, c.text, d.title AS doc_title, d.source AS doc_source
        FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c.doc_id
-       WHERE c.project_id = ? AND (${where})
-       LIMIT 2000`,
+       WHERE c.project_id = ? AND c.text <> '' AND (${where})
+       LIMIT 1200`,
     )
-    .all(projectId, ...probes.map((t) => `%${esc(t)}%`)) as unknown as (ChunkRow & {
+    .all(projectId, ...probes.map((t) => `%${esc(t)}%`)) as unknown as {
+    doc_id: string;
+    chunk_index: number;
+    text: string;
     doc_title: string;
     doc_source: string;
-  })[];
+  }[];
 
   const scored = rows
     .map((r) => {
       const text = r.text.toLowerCase();
-      let score = 0;
+      let matched = 0;
+      let weighted = 0;
       for (const t of terms) {
-        if (text.includes(t)) score += t.length >= 2 ? 2 : 1;
+        if (text.includes(t)) {
+          matched += 1;
+          // 长词更可信：命中一个 4 字词比命中一个「的时」有价值
+          weighted += Math.min(4, t.length);
+        }
       }
+      if (matched === 0) return null;
+      // 覆盖率补偿：短查询只切出几个 2-gram 时，不能靠重复命中刷分
+      const coverage = matched / terms.size;
       return {
         docId: r.doc_id,
         docTitle: r.doc_title,
         source: r.doc_source,
         chunkIndex: r.chunk_index,
         text: r.text,
-        score,
+        score: Math.round(weighted * (0.6 + coverage) * 100) / 100,
       };
     })
-    .filter((r) => r.score > 0)
+    .filter((r): r is KnowledgeHit => r !== null)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 

@@ -147,12 +147,12 @@ export async function* streamChat(opts: StreamChatOptions): AsyncGenerator<
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    // SSE 以空行分隔事件
-    let sep: number;
-    while ((sep = buffer.indexOf('\n\n')) !== -1) {
-      const raw = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      const line = raw.split('\n').find((l) => l.startsWith('data:'));
+    // SSE 以空行分隔事件；不同厂商可能用 LF 或 CRLF
+    let ev: { raw: string; rest: string } | null;
+    while ((ev = takeSseEvent(buffer)) !== null) {
+      const raw = ev.raw;
+      buffer = ev.rest;
+      const line = raw.split(/\r?\n/).find((l) => l.startsWith('data:'));
       if (!line) continue;
       const payload = line.slice(5).trim();
       if (!payload || payload === '[DONE]') continue;
@@ -269,10 +269,29 @@ export async function completeAccumulated(
   return out;
 }
 
-function joinUrl(base: string, suffix: string): string {
-  const b = base.replace(/\/+$/, '');
-  // 允许用户直接粘贴到 /chat/completions 的完整地址
-  if (b.endsWith('/chat/completions')) return b;
+/** 从 SSE 缓冲里切出下一个事件，同时支持 LF 与 CRLF 分帧 */
+export function takeSseEvent(buffer: string): { raw: string; rest: string } | null {
+  const lf = buffer.indexOf('\n\n');
+  const crlf = buffer.indexOf('\r\n\r\n');
+
+  let idx = -1;
+  let sepLen = 2;
+  if (lf >= 0 && (crlf < 0 || lf < crlf)) {
+    idx = lf;
+  } else if (crlf >= 0) {
+    idx = crlf;
+    sepLen = 4;
+  }
+  if (idx < 0) return null;
+  return { raw: buffer.slice(0, idx), rest: buffer.slice(idx + sepLen) };
+}
+
+/**
+ * 兼容用户直接粘贴到 /chat/completions 的完整地址。
+ * 先剥掉端点后缀再拼，否则 /models 会拼成 /chat/completions/models。
+ */
+export function joinUrl(base: string, suffix: string): string {
+  const b = base.replace(/\/+$/, '').replace(/\/(chat\/completions|models)$/i, '');
   return `${b}${suffix}`;
 }
 

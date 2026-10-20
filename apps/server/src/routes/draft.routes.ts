@@ -41,6 +41,7 @@ import {
   createChapter,
   createVolume,
   getChapter,
+  listChapterDigests,
   listChapters,
   listVolumes,
   updateChapter,
@@ -663,9 +664,8 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
 
-    const all = listChapters(project.id)
-      .map((c) => getChapter(c.id))
-      .filter((c): c is NonNullable<typeof c> => c !== null);
+    // 只需要标题/大纲，不读正文；1000 章时避免 N+1 查询和整本书进内存
+    const all = listChapterDigests(project.id);
 
     const wantIds = parsed.data.ids?.length ? new Set(parsed.data.ids) : null;
     const onlyMissing = parsed.data.onlyMissing !== false;
@@ -777,9 +777,8 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
 
-    const all = listChapters(project.id)
-      .map((c) => getChapter(c.id))
-      .filter((c): c is NonNullable<typeof c> => c !== null);
+    // 只需要标题/大纲，不读正文；1000 章时避免 N+1 查询和整本书进内存
+    const all = listChapterDigests(project.id);
     const idx = all.findIndex((c) => c.id === chapter.id);
 
     const prompt = buildOutlineFillPrompt({
@@ -925,7 +924,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
         { maxTokens: 4000, signal: AbortSignal.timeout(90_000) },
       );
 
-      const result = parseRefine(raw, allowChapters);
+      const result = parseRefine(raw, allowChapters, draft);
       if (!result) {
         return reply.code(502).send({
           error: 'refine_failed',

@@ -8,6 +8,22 @@ export interface StreamCallbacks {
   onError: (message: string) => void;
 }
 
+/** 与服务端一致：同时支持 LF 与 CRLF 的 SSE 分帧 */
+function takeEvent(buffer: string): { raw: string; rest: string } | null {
+  const lf = buffer.indexOf('\n\n');
+  const crlf = buffer.indexOf('\r\n\r\n');
+  let idx = -1;
+  let sepLen = 2;
+  if (lf >= 0 && (crlf < 0 || lf < crlf)) {
+    idx = lf;
+  } else if (crlf >= 0) {
+    idx = crlf;
+    sepLen = 4;
+  }
+  if (idx < 0) return null;
+  return { raw: buffer.slice(0, idx), rest: buffer.slice(idx + sepLen) };
+}
+
 /**
  * 读取 SSE 流。用 fetch + ReadableStream，因为 EventSource 不支持 POST。
  * 返回 abort 函数，供「停止生成」按钮调用。
@@ -45,11 +61,11 @@ export function streamWrite(body: unknown, cb: StreamCallbacks): () => void {
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
 
-        let sep: number;
-        while ((sep = buffer.indexOf('\n\n')) !== -1) {
-          const raw = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
-          const line = raw.split('\n').find((l) => l.startsWith('data:'));
+        let frame: { raw: string; rest: string } | null;
+        while ((frame = takeEvent(buffer)) !== null) {
+          const raw = frame.raw;
+          buffer = frame.rest;
+          const line = raw.split(/\r?\n/).find((l) => l.startsWith('data:'));
           if (!line) continue;
           try {
             const ev = JSON.parse(line.slice(5).trim()) as StreamEvent;

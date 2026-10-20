@@ -10,7 +10,7 @@ import {
   updateForeshadow,
   updateTimelineEvent,
 } from '../repos/consistency.repo.js';
-import { listChapters, getChapter } from '../repos/chapters.repo.js';
+import { listChapterDigests, getLastChapterContent } from '../repos/chapters.repo.js';
 import { listEntities } from '../repos/entities.repo.js';
 import { listDocs } from '../repos/layers.repo.js';
 import { addConstraints } from '../repos/constraints.repo.js';
@@ -101,10 +101,12 @@ export async function consistencyRoutes(app: FastifyInstance): Promise<void> {
         throw e;
       }
 
-      // 组装检查材料：设定 + 伏笔 + 时间线 + 章节（含正文）
-      const chapters = listChapters(project.id)
-        .map((c) => getChapter(c.id))
-        .filter((c): c is NonNullable<typeof c> => c !== null);
+      // 组装检查材料：设定 + 伏笔 + 时间线 + 章节梗概。
+      // 只取摘要列，正文单独取最后一章——检查器判断「当下写法」只需要这一章。
+      const chapters = listChapterDigests(project.id);
+      if (chapters.length > 0) {
+        chapters[chapters.length - 1]!.content = getLastChapterContent(project.id);
+      }
 
       if (chapters.length === 0 && listEntities(project.id).length === 0) {
         return reply.code(400).send({
