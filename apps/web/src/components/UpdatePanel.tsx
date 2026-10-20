@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CurrentVersion, UpdateInfo } from '@novelforge/shared';
 import { api } from '../api/client';
 
@@ -17,6 +17,7 @@ export function UpdatePanel() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const resultRef = useRef<HTMLDivElement | null>(null);
 
   // 打开设置时只读本地版本，不联网
   useEffect(() => {
@@ -34,6 +35,10 @@ export function UpdatePanel() {
       const r = await api.get<UpdateInfo>(`/api/update/check${force ? '?force=1' : ''}`);
       setInfo(r);
       setCurrent(r.current);
+      // 结果可能比原来的提示块高，等渲染完再滚到可见位置，避免升级命令被弹窗底部裁掉
+      requestAnimationFrame(() =>
+        resultRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }),
+      );
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -88,6 +93,7 @@ export function UpdatePanel() {
 
       {info && !err && (
         <div
+          ref={resultRef}
           style={{
             marginTop: 10,
             padding: '10px 12px',
