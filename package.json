@@ -26,7 +26,8 @@
     "push": "node scripts/push.mjs",
     "mock:llm": "node scripts/mock-llm.mjs",
     "seed": "pnpm --filter @novelforge/server seed",
-    "clean": "node scripts/clean.mjs"
+    "clean": "node scripts/clean.mjs",
+    "test:e2e:plan-apply": "node scripts/e2e-plan-apply.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.2"

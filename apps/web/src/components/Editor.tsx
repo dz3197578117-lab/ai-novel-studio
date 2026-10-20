@@ -122,9 +122,15 @@ export function Editor() {
   const [planTarget, setPlanTarget] = useState<'outline' | 'beats'>('outline');
   const [planInput, setPlanInput] = useState('');
   const [planBusy, setPlanBusy] = useState(false);
-  const [planResult, setPlanResult] = useState<{ mode: 'ask' | 'revise'; text: string } | null>(
-    null,
-  );
+  // 对大纲/细纲的提问与整改：结果要记住「属于哪一章、哪个字段」，
+  // 否则请求期间切换章节后点「应用」，会把 A 章的整改写进 B 章。
+  const [planResult, setPlanResult] = useState<{
+    mode: 'ask' | 'revise';
+    text: string;
+    chapterId: string;
+    chapterTitle: string;
+    field: 'outline' | 'beats';
+  } | null>(null);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [layerBusy, setLayerBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -137,7 +143,10 @@ export function Editor() {
   const [showFacts, setShowFacts] = useState(false);
   // AI 自查整改（列点 → 自己查资料 → 按资料改大纲/细纲）
   const [selfFixBusy, setSelfFixBusy] = useState(false);
-  const [selfFix, setSelfFix] = useState<SelfFixResult | null>(null);
+  // 同样绑定章节：跨章时「应用」要写回原章节，而不是当前章
+  const [selfFix, setSelfFix] = useState<
+    (SelfFixResult & { chapterId: string; chapterTitle: string }) | null
+  >(null);
   /** 查资料时是否联网检索 */
   const [useWeb, setUseWeb] = useState(true);
 
@@ -407,15 +416,16 @@ export function Editor() {
   /** AI 自查整改：列点 → 自己检索资料 → 按资料改写大纲/细纲 */
   async function runSelfFix() {
     if (!chapter) return;
+    const targetChapter = chapter;
     setSelfFixBusy(true);
     setError(null);
     setSelfFix(null);
     try {
       const r = await api.post<SelfFixResult & { applied: boolean }>(
-        `/api/chapters/${chapter.id}/self-fix`,
+        `/api/chapters/${targetChapter.id}/self-fix`,
         { apply: false, web: useWeb },
       );
-      setSelfFix(r);
+      setSelfFix({ ...r, chapterId: targetChapter.id, chapterTitle: targetChapter.title });
       if (r.changes.some((c) => c.verdict === 'fixed')) setShowFacts(true);
     } catch (e) {
       setError((e as Error).message);
@@ -424,16 +434,30 @@ export function Editor() {
     }
   }
 
-  /** 采纳自查整改结果：写回大纲/细纲（仍需保存） */
-  function applySelfFix() {
+  /** 采纳自查整改结果：写回「发起整改的那一章」，跨章时直接打接口 */
+  async function applySelfFix() {
     if (!selfFix) return;
-    setOutline(selfFix.outline);
-    markEdit({ outline: selfFix.outline });
-    if (selfFix.beats) {
-      setBeats(selfFix.beats);
-      markEdit({ beats: selfFix.beats, outline: selfFix.outline });
-    }
+    const { chapterId, chapterTitle, outline, beats } = selfFix;
     setSelfFix(null);
+
+    if (chapter?.id === chapterId) {
+      setOutline(outline);
+      markEdit({ outline });
+      if (beats) {
+        setBeats(beats);
+        markEdit({ beats, outline });
+      }
+      return;
+    }
+
+    // 已经切到别的章节：不要污染当前章，直接写回原章节
+    try {
+      await api.patch(`/api/chapters/${chapterId}`, { outline, ...(beats ? { beats } : {}) });
+      await refresh();
+      setError(`自查整改结果已写入「${chapterTitle}」（你当前在另一章，没有覆盖当前章）`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   /** 标记写作约束已解决：之后生成不再注入 */
@@ -449,20 +473,27 @@ export function Editor() {
   /** 对大纲 / 细纲提问或要求整改 */
   async function revisePlan(mode: 'ask' | 'revise') {
     if (!chapter || !planInput.trim()) return;
+    const targetChapter = chapter;
+    const targetField = planTarget;
     setPlanBusy(true);
     setPlanResult(null);
     try {
       const r = await api.post<{ mode: 'ask' | 'revise'; text: string }>(
         '/api/ai/revise-plan',
         {
-          projectId: chapter.projectId,
-          chapterId: chapter.id,
-          field: planTarget,
+          projectId: targetChapter.projectId,
+          chapterId: targetChapter.id,
+          field: targetField,
           mode,
           instruction: planInput.trim(),
         },
       );
-      setPlanResult(r);
+      setPlanResult({
+        ...r,
+        chapterId: targetChapter.id,
+        chapterTitle: targetChapter.title,
+        field: targetField,
+      });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -471,17 +502,34 @@ export function Editor() {
   }
 
   /** 把整改结果应用到对应字段（只是填进输入框和本地状态，仍需保存） */
-  function applyPlan() {
+  async function applyPlan() {
     if (!planResult || planResult.mode !== 'revise') return;
-    if (planTarget === 'outline') {
-      setOutline(planResult.text);
-      markEdit({ outline: planResult.text });
-    } else {
-      setBeats(planResult.text);
-      markEdit({ beats: planResult.text });
-    }
+    const { text, field, chapterId, chapterTitle } = planResult;
     setPlanResult(null);
     setPlanInput('');
+
+    // 仍停留在原章节：改本地状态（等自动保存）
+    if (chapter?.id === chapterId) {
+      if (field === 'outline') {
+        setOutline(text);
+        markEdit({ outline: text });
+      } else {
+        setBeats(text);
+        markEdit({ beats: text });
+      }
+      return;
+    }
+
+    // 已经切章：直接写回原章节，避免把 A 章的整改写进 B 章
+    try {
+      await api.patch(`/api/chapters/${chapterId}`, {
+        [field === 'outline' ? 'outline' : 'beats']: text,
+      });
+      await refresh();
+      setError(`整改结果已写入「${chapterTitle}」（你当前在另一章，没有覆盖当前章）`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   /** 单章补大纲（目录只出了名字时用） */
@@ -760,7 +808,12 @@ export function Editor() {
             {selfFix && (
               <div className="plan-result" style={{ marginTop: 8 }}>
                 <div className="plan-result-head">
-                  <span>自查整改 · 检索到 {selfFix.hitCount} 段资料</span>
+                  <span>
+                    自查整改 · 检索到 {selfFix.hitCount} 段资料
+                    {selfFix.chapterId !== chapter?.id && (
+                      <span className="badge-other"> · {selfFix.chapterTitle}</span>
+                    )}
+                  </span>
                   <span style={{ display: 'flex', gap: 6 }}>
                     <button className="count-chip" onClick={applySelfFix}>
                       应用
@@ -874,7 +927,10 @@ export function Editor() {
                   <span>
                     {planResult.mode === 'ask'
                       ? '回答'
-                      : `整改后的${planTarget === 'outline' ? '大纲' : '细纲'}`}
+                      : `整改后的${planResult.field === 'outline' ? '大纲' : '细纲'}`}
+                    {planResult.chapterId !== chapter?.id && (
+                      <span className="badge-other"> · {planResult.chapterTitle}</span>
+                    )}
                   </span>
                   <span style={{ display: 'flex', gap: 6 }}>
                     {planResult.mode === 'revise' && (
