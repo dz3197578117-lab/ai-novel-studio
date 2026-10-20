@@ -190,6 +190,9 @@ async function main() {
       check('设定中心已打开', title.includes('设定中心'), title);
 
       // ── 伏笔 ──
+      // 设定中心默认页签是「硬约束」，先切到伏笔台账
+      check('切到伏笔台账', await clickText('伏笔台账'));
+      await sleep(500);
       check('填写伏笔标题', await fillInput('如：父亲临终前提到的', '北境的塔'));
       check('添加伏笔', await clickText('添加伏笔'));
       await sleep(1200);

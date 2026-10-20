@@ -223,7 +223,8 @@ async function main() {
       }
       check('当前配置可连通', testMsg.includes('连接成功'), testMsg.slice(0, 60));
 
-      // 7. 删除另一个配置
+      // 7. 删除其它配置：先点一次 UI 验证删除路径，再把剩下的用 API 清掉
+      //    （环境里可能有多套配置，不能假设只有两套；测试结束会整体还原 settings）
       const deleted = await evaluate(`(() => {
         const row = Array.from(document.querySelectorAll('.profile-row')).find(r => !r.textContent.includes('本地 Mock'));
         if (!row) return false;
@@ -236,12 +237,20 @@ async function main() {
       check('点击删除其它配置', deleted);
       await sleep(1500);
 
+      const mid = await apiJson('/api/settings');
+      for (const prof of mid.profiles) {
+        if (prof.name !== '本地 Mock') {
+          await apiJson(`/api/profiles/${prof.id}`, { method: 'DELETE' });
+        }
+      }
+
       settingsState = await apiJson('/api/settings');
       check('删除后只剩一个配置', settingsState.profiles.length === 1, `${settingsState.profiles.length} 条`);
       check(
         '当前配置仍有效',
-        settingsState.profiles[0]?.id === settingsState.activeProfileId,
-        settingsState.profiles[0]?.name,
+        settingsState.profiles[0]?.id === settingsState.activeProfileId &&
+          settingsState.profiles[0]?.name === '本地 Mock',
+        `${settingsState.profiles[0]?.name} / active=${settingsState.activeProfileId}`,
       );
 
       // 8. 关闭弹窗，回到书架

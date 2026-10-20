@@ -62,6 +62,8 @@ async function main() {
   const originalSettings = dumpSettings();
   const mock = await ensureMock();
   let createdProjectId = null;
+  /** 本次运行开始时间：兜底清理用，避免失败时留下测试作品 */
+  const startedAt = new Date().toISOString();
 
   try {
     const created = await apiJson('/api/profiles', {
@@ -228,19 +230,25 @@ async function main() {
       check('点击「开始生成方案」', clickedGenerate);
 
       let draftTitle = '';
-      for (let i = 0; i < 40; i++) {
-        await sleep(400);
-        draftTitle = await evaluate('document.querySelector(".draft-title")?.textContent ?? ""');
+      for (let i = 0; i < 180; i++) {
+        await sleep(500);
+        draftTitle = await evaluate('document.querySelector("input.draft-title-input")?.value ?? ""');
         if (draftTitle) break;
       }
       check('生成出小说方案', Boolean(draftTitle), draftTitle);
 
-      const chaptersRendered = await evaluate('document.querySelectorAll(".draft-chapter").length');
+      // 分批生成是后台跑的，章节数要等齐
+      let chaptersRendered = 0;
+      for (let i = 0; i < 180; i++) {
+        await sleep(500);
+        chaptersRendered = await evaluate('document.querySelectorAll(".draft-chapter").length');
+        if (chaptersRendered >= 45) break;
+      }
       check('预览包含章节大纲', chaptersRendered >= 3, `${chaptersRendered} 章`);
       check('分批生成了全部 45 章', chaptersRendered === 45, `${chaptersRendered} 章`);
 
       const titleList = await evaluate(
-        'Array.from(document.querySelectorAll(".draft-chapter-title")).map(e=>e.textContent).join("|")',
+        'Array.from(document.querySelectorAll(".draft-chapter-row input")).map(e=>e.value).join("|")',
       );
       check(
         '跨批章节编号连续（第1章到第45章，没有重数）',
@@ -249,12 +257,14 @@ async function main() {
       );
       const entitiesRendered = await evaluate('document.querySelectorAll(".draft-entity").length');
       check('预览包含设定条目', entitiesRendered >= 3, `${entitiesRendered} 条`);
-      const volumesRendered = await evaluate('document.querySelectorAll(".draft-volume").length');
+      const volumesRendered = await evaluate(
+        'document.querySelectorAll(".draft-volume-input").length',
+      );
       check('预览按卷分组', volumesRendered >= 1, `${volumesRendered} 卷`);
 
       // 单章大纲重做
       const firstTitleBefore = await evaluate(
-        'document.querySelectorAll(".draft-chapter-title")[0]?.textContent ?? ""',
+        'document.querySelectorAll(".draft-chapter-row input")[0]?.value ?? ""',
       );
       const regenClicked = await evaluate(`(() => {
         const btn = document.querySelectorAll('.draft-regen')[0];
@@ -268,14 +278,14 @@ async function main() {
       for (let i = 0; i < 30; i++) {
         await sleep(300);
         regenTitle = await evaluate(
-          'document.querySelectorAll(".draft-chapter-title")[0]?.textContent ?? ""',
+          'document.querySelectorAll(".draft-chapter-row input")[0]?.value ?? ""',
         );
         if (regenTitle.includes('重做版')) break;
       }
       check('单章大纲已重做', regenTitle.includes('重做版'), `${firstTitleBefore} → ${regenTitle}`);
 
       const others = await evaluate(
-        'Array.from(document.querySelectorAll(".draft-chapter-title")).slice(1).map(e=>e.textContent).join("|")',
+        'Array.from(document.querySelectorAll(".draft-chapter-row input")).slice(1).map(e=>e.value).join("|")',
       );
       check('其它章节没有被一起改掉', !others.includes('重做版'), `剩余 ${others.split('|').length} 章`);
 
@@ -300,7 +310,10 @@ async function main() {
 
       // 9. 数据落库
       const projects = await apiJson('/api/projects');
-      const proj = projects.find((p) => p.title === draftTitle);
+      const matches = projects
+        .filter((p) => p.title === draftTitle)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+      const proj = matches[0];
       check('作品已写入数据库', Boolean(proj), proj?.title);
       if (proj) {
         createdProjectId = proj.id;
@@ -320,6 +333,17 @@ async function main() {
   } finally {
     if (createdProjectId) {
       await fetch(`${API}/api/projects/${createdProjectId}`, { method: 'DELETE' }).catch(() => {});
+    }
+    // 兜底：删掉本次运行期间新建的作品（失败路径也可能已经建书）
+    try {
+      const all = await apiJson('/api/projects');
+      for (const p of all) {
+        if (p.createdAt >= startedAt) {
+          await fetch(`${API}/api/projects/${p.id}`, { method: 'DELETE' }).catch(() => {});
+        }
+      }
+    } catch {
+      /* 清理失败不影响测试结论 */
     }
     restoreSettings(originalSettings);
     if (mock) mock.kill();
