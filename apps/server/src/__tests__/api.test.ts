@@ -39,6 +39,8 @@ const patch = (url: string, payload: unknown) =>
   app.inject({ method: 'PATCH', url, payload: payload as object });
 const get = (url: string) => app.inject({ method: 'GET', url });
 const del = (url: string) => app.inject({ method: 'DELETE', url });
+const put = (url: string, payload: unknown) =>
+  app.inject({ method: 'PUT', url, payload: payload as object });
 
 describe('健康检查', () => {
   test('返回 ok', async () => {
@@ -1152,6 +1154,37 @@ describe('写前自查整改', () => {
   test('章节不存在返回 404', async () => {
     const res = await post('/api/chapters/nope/self-fix', {});
     assert.equal(res.statusCode, 404);
+  });
+});
+
+describe('联网查资料开关', () => {
+  test('默认开启，且可关闭再打开', async () => {
+    const s1 = JSON.parse((await get('/api/settings')).body) as {
+      webSearch: { enabled: boolean };
+    };
+    assert.equal(typeof s1.webSearch.enabled, 'boolean');
+
+    const off = await put('/api/settings/websearch', { enabled: false });
+    assert.equal(off.statusCode, 200);
+    const s2 = JSON.parse((await get('/api/settings')).body) as {
+      webSearch: { enabled: boolean };
+    };
+    assert.equal(s2.webSearch.enabled, false);
+
+    // 关闭时手动联网检索应被拒绝
+    const r = await post('/api/search/web', { query: '内务府' });
+    assert.equal(r.statusCode, 412);
+
+    await put('/api/settings/websearch', { enabled: true });
+    const s3 = JSON.parse((await get('/api/settings')).body) as {
+      webSearch: { enabled: boolean };
+    };
+    assert.equal(s3.webSearch.enabled, true);
+  });
+
+  test('空查询返回 400', async () => {
+    const res = await post('/api/search/web', { query: '  ' });
+    assert.equal(res.statusCode, 400);
   });
 });
 

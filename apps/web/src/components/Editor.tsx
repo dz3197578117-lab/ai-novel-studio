@@ -138,6 +138,8 @@ export function Editor() {
   // AI 自查整改（列点 → 自己查资料 → 按资料改大纲/细纲）
   const [selfFixBusy, setSelfFixBusy] = useState(false);
   const [selfFix, setSelfFix] = useState<SelfFixResult | null>(null);
+  /** 查资料时是否联网检索 */
+  const [useWeb, setUseWeb] = useState(true);
 
   // 本章视角覆盖（null = 继承项目默认）
   const [povOverride, setPovOverride] = useState<NarrativePov | null>(null);
@@ -389,7 +391,9 @@ export function Editor() {
     setFactBusy(true);
     setError(null);
     try {
-      const sheet = await api.post<FactSheet>(`/api/chapters/${chapter.id}/facts`);
+      const sheet = await api.post<FactSheet>(`/api/chapters/${chapter.id}/facts`, {
+        web: useWeb,
+      });
       setFactSheet(sheet);
       setFacts(sheet.points);
       setShowFacts(true);
@@ -409,7 +413,7 @@ export function Editor() {
     try {
       const r = await api.post<SelfFixResult & { applied: boolean }>(
         `/api/chapters/${chapter.id}/self-fix`,
-        { apply: false },
+        { apply: false, web: useWeb },
       );
       setSelfFix(r);
       if (r.changes.some((c) => c.verdict === 'fixed')) setShowFacts(true);
@@ -677,6 +681,14 @@ export function Editor() {
                 )}
               </span>
               <span className="prep-actions">
+                <label className="web-toggle" title="查资料时同时联网检索（结果带链接）">
+                  <input
+                    type="checkbox"
+                    checked={useWeb}
+                    onChange={(e) => setUseWeb(e.target.checked)}
+                  />
+                  联网
+                </label>
                 {facts.length > 0 && (
                   <button className="count-chip" onClick={() => setShowFacts((v) => !v)}>
                     {showFacts ? '收起' : '查看'}
@@ -717,9 +729,21 @@ export function Editor() {
                             .filter((h) => h.forPoints.includes(f.point))
                             .map((h, j) => (
                               <div className="facts-hit" key={j}>
-                                资料：{h.docTitle}
-                                {h.source ? ` · ${h.source}` : ''} —{' '}
-                                {snippetAround(h.text, f.query)}
+                                {h.url ? (
+                                  <>
+                                    <span className="web-flag">联网</span>
+                                    <a href={h.url} target="_blank" rel="noreferrer">
+                                      {h.docTitle.replace(/^网络：/, '')}
+                                    </a>
+                                    ：{snippetAround(h.text, f.query)}
+                                  </>
+                                ) : (
+                                  <>
+                                    资料：{h.docTitle}
+                                    {h.source ? ` · ${h.source}` : ''} —{' '}
+                                    {snippetAround(h.text, f.query)}
+                                  </>
+                                )}
                               </div>
                             ))}
                         </div>
@@ -762,7 +786,18 @@ export function Editor() {
                         {c.action && (
                           <div className="selffix-action">
                             {c.action}
-                            {c.source ? `（依据：${c.source}）` : ''}
+                            {c.source &&
+                              (/^https?:\/\//.test(c.source) ? (
+                                <>
+                                  （依据：
+                                  <a href={c.source} target="_blank" rel="noreferrer">
+                                    网络资料
+                                  </a>
+                                  ）
+                                </>
+                              ) : (
+                                `（依据：${c.source}）`
+                              ))}
                           </div>
                         )}
                       </div>

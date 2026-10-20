@@ -199,6 +199,8 @@ export interface Settings {
   activeProfileId: ID | null;
   image: ImageProviderConfig;
   hasImageKey: boolean;
+  /** 写作前是否允许联网查资料 */
+  webSearch: { enabled: boolean };
 }
 
 /** 拉取某个服务商的可用模型列表 */
@@ -563,6 +565,10 @@ export interface FactSheet {
     docTitle: string;
     source: string;
     text: string;
+    /** 联网检索到的结果带 URL，作者可点开核对 */
+    url?: string;
+    /** local=作者资料库，web=联网检索 */
+    origin?: 'local' | 'web';
   }[];
   generatedAt: string;
 }

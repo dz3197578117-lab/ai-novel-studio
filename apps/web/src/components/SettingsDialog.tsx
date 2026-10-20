@@ -126,6 +126,17 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
     }
   }
 
+  /** 开关联网查资料 */
+  async function toggleWebSearch(enabled: boolean) {
+    try {
+      await api.put('/api/settings/websearch', { enabled });
+      await reload();
+      setMsg({ ok: true, text: enabled ? '已开启联网查资料' : '已关闭联网查资料' });
+    } catch (e) {
+      setMsg({ ok: false, text: (e as Error).message });
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     setEditing(null);
@@ -299,6 +310,24 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
             没有检测到 DSH 的登录凭据（{dsh?.home ?? '~/.dsh'}）。可以在下面手动添加模型配置。
           </p>
         )}
+      </div>
+
+      {/* ── 联网查资料 ── */}
+      <div className="settings-section">
+        <div className="settings-head">
+          <h3>联网查资料</h3>
+        </div>
+        <label className="hint" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 0, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings?.webSearch.enabled ?? true}
+            onChange={(e) => void toggleWebSearch(e.target.checked)}
+          />
+          写作前「查资料 / 自查整改」时允许联网检索（360 / 搜狗），结果会带可点开的链接
+        </label>
+        <p className="hint" style={{ marginBottom: 0 }}>
+          联网只用于检索公开网页，不上传你的正文；查到的内容会标「联网」并附出处，方便你核对后再用。
+        </p>
       </div>
 
       <div className="settings-section">

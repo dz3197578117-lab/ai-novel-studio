@@ -162,7 +162,8 @@ export function buildSelfFixPrompt(input: {
 }
 
 verdict 取值：ok=原文就符合；fixed=已按资料改正；unknown=资料未覆盖。
-changes 最多 5 条，每条 action 不超过 40 字；大纲控制在 150 字内、细纲不超过 6 行。`;
+changes 最多 5 条，每条 action 不超过 40 字；大纲控制在 150 字内、细纲不超过 6 行。
+如果改动依据的是「网络：」开头的资料，source 请填它的 URL，便于作者点开核对。`;
 
   const entityLines = entities
     .slice(0, 6)
@@ -176,8 +177,11 @@ changes 最多 5 条，每条 action 不超过 40 字；大纲控制在 150 字�
   // 控制请求体积：服务商按每分钟 token 限流，资料只带最相关的几段短摘录
   const hitLines = hits.length
     ? hits
-        .slice(0, 3)
-        .map((h) => `- 〔${h.docTitle}〕${h.text.slice(0, 140)}`)
+        .slice(0, 4)
+        .map(
+          (h) =>
+            `- 〔${h.docTitle}${h.url ? ` ${h.url}` : ''}〕${h.text.slice(0, 140)}`,
+        )
         .join('\n')
     : '（没有检索到资料）';
 

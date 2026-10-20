@@ -7,10 +7,12 @@ import {
   getImageConfig,
   getProfile,
   getProfiles,
+  getWebSearchConfig,
   maskKey,
   resolveSecret,
   setActiveProfileId,
   setImageConfig,
+  setWebSearchConfig,
   toProviderConfig,
   updateProfile,
   type StoredProfile,
@@ -33,7 +35,15 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       activeProfileId: getActiveProfileId() ?? profiles[0]?.id ?? null,
       image: { ...image, apiKey: maskKey(image.apiKey) },
       hasImageKey: Boolean(image.apiKey),
+      webSearch: getWebSearchConfig(),
     };
+  });
+
+  /** 开关：写作前是否允许联网查资料 */
+  app.put<{ Body: { enabled?: boolean } }>('/api/settings/websearch', async (req, reply) => {
+    const enabled = Boolean(req.body?.enabled);
+    setWebSearchConfig({ enabled });
+    return { enabled };
   });
 
   /** 新增一套模型配置 */

@@ -179,6 +179,23 @@ export function setImageConfig(cfg: ImageProviderConfig): void {
   writeRaw('image', cfg);
 }
 
+// ───────────────────────── 联网查资料 ─────────────────────────
+
+export interface WebSearchConfig {
+  /** 是否允许写作前联网检索 */
+  enabled: boolean;
+}
+
+const DEFAULT_WEBSEARCH: WebSearchConfig = { enabled: true };
+
+export function getWebSearchConfig(): WebSearchConfig {
+  return readRaw<WebSearchConfig>('websearch') ?? DEFAULT_WEBSEARCH;
+}
+
+export function setWebSearchConfig(cfg: WebSearchConfig): void {
+  writeRaw('websearch', cfg);
+}
+
 // ───────────────────────── Key 处理 ─────────────────────────
 
 /** 只显示前 3 后 4 位 */
