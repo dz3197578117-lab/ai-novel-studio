@@ -158,7 +158,9 @@ const server = http.createServer((req, res) => {
       const isBeatsRequest = /小说结构编辑/.test(system?.content ?? '');
       const isScenesRequest = /小说场景设计师/.test(system?.content ?? '');
       // 写前列事实清单
-      const isFactRequest = /长篇小说的资料员/.test(system?.content ?? '');
+      const isFactRequest = /资料员，负责在作者动笔前/.test(system?.content ?? '');
+      // 写前自查整改（列点 → 查资料 → 按资料改大纲/细纲）
+      const isSelfFix = /资料员兼责任编辑/.test(system?.content ?? '');
       // 方案微调
       const isRefineRequest = /微调一份\*\*已经成型\*\*的方案/.test(system?.content ?? '');
       const isRegenRequest = /单独重做\*\*第\s*\d+\s*章\*\*/.test(system?.content ?? '');
@@ -174,7 +176,31 @@ const server = http.createServer((req, res) => {
       );
 
       let content = SAMPLE.join('');
-      if (isRefineRequest) {
+      if (isSelfFix) {
+        content = JSON.stringify({
+          outline:
+            '我在冷院冻醒，小顺子哭报炭湿米陈；管事太监上门催六两冬衣钱，我算给他听，递软话不认账，反套出炭、衣、米三处卡关的底细。人走清库房，我盯上积压的猪油和灶灰。',
+          beats:
+            '1. 【冷院破屋·清晨】灌风冻醒，两件补丁旧袍 → 认出自己穿成冷门阿哥\n' +
+            '2. 【屋内】小顺子哭报炭潮米陈 → 记下份例账实不符\n' +
+            '3. 【院门口】管事太监催六两冬衣钱 → 软话顶回去，要凭据\n' +
+            '4. 【库房】翻出八十两欠据、盯上猪油与灶灰 → 钩子：来人提空食盒',
+          changes: [
+            {
+              point: '未封爵皇子的分例数额是否为月银三两',
+              verdict: 'fixed',
+              action:
+                '把「月银三两」改成「账面上数目照例、到手只剩这些」，避免把制度定额写成低规格',
+              source: '清代皇子待遇与内务府腐败（史实参考）',
+            },
+            {
+              point: '内务府下属机构名称',
+              verdict: 'unknown',
+              action: '资料未覆盖广储司/营造司的具体归属，按硬约束保留现有写法',
+            },
+          ],
+        });
+      } else if (isRefineRequest) {
         content = JSON.stringify(REFINE_SAMPLE);
       } else if (isFactRequest) {
         content = JSON.stringify(FACT_SAMPLE);

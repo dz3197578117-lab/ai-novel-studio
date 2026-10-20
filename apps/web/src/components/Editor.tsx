@@ -6,6 +6,7 @@ import type {
   FactPoint,
   FactSheet,
   NarrativePov,
+  SelfFixResult,
   Scene,
   WritingConstraint,
 } from '@novelforge/shared';
@@ -134,6 +135,9 @@ export function Editor() {
   const [factSheet, setFactSheet] = useState<FactSheet | null>(null);
   const [factBusy, setFactBusy] = useState(false);
   const [showFacts, setShowFacts] = useState(false);
+  // AI 自查整改（列点 → 自己查资料 → 按资料改大纲/细纲）
+  const [selfFixBusy, setSelfFixBusy] = useState(false);
+  const [selfFix, setSelfFix] = useState<SelfFixResult | null>(null);
 
   // 本章视角覆盖（null = 继承项目默认）
   const [povOverride, setPovOverride] = useState<NarrativePov | null>(null);
@@ -396,6 +400,38 @@ export function Editor() {
     }
   }
 
+  /** AI 自查整改：列点 → 自己检索资料 → 按资料改写大纲/细纲 */
+  async function runSelfFix() {
+    if (!chapter) return;
+    setSelfFixBusy(true);
+    setError(null);
+    setSelfFix(null);
+    try {
+      const r = await api.post<SelfFixResult & { applied: boolean }>(
+        `/api/chapters/${chapter.id}/self-fix`,
+        { apply: false },
+      );
+      setSelfFix(r);
+      if (r.changes.some((c) => c.verdict === 'fixed')) setShowFacts(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSelfFixBusy(false);
+    }
+  }
+
+  /** 采纳自查整改结果：写回大纲/细纲（仍需保存） */
+  function applySelfFix() {
+    if (!selfFix) return;
+    setOutline(selfFix.outline);
+    markEdit({ outline: selfFix.outline });
+    if (selfFix.beats) {
+      setBeats(selfFix.beats);
+      markEdit({ beats: selfFix.beats, outline: selfFix.outline });
+    }
+    setSelfFix(null);
+  }
+
   /** 标记写作约束已解决：之后生成不再注入 */
   async function resolveConstraint(id: string) {
     try {
@@ -649,10 +685,19 @@ export function Editor() {
                 <button
                   className="count-chip"
                   onClick={() => void genFacts()}
-                  disabled={factBusy}
+                  disabled={factBusy || selfFixBusy}
                   title="让 AI 列出本章需要核实的史实/设定点，并检索你上传的资料"
                 >
                   {factBusy ? '分析中…' : facts.length ? '重新生成' : 'AI 列事实清单'}
+                </button>
+                <button
+                  className="primary"
+                  style={{ padding: '3px 10px', fontSize: 11 }}
+                  onClick={() => void runSelfFix()}
+                  disabled={selfFixBusy || factBusy}
+                  title="AI 自己检索资料，并直接改掉大纲/细纲里与资料冲突的地方"
+                >
+                  {selfFixBusy ? '自查中…' : 'AI 自查整改'}
                 </button>
               </span>
             </div>
@@ -684,6 +729,45 @@ export function Editor() {
                 </div>
                 <div className="facts-foot">
                   这些点会用来检索你的资料库，写正文时自动带进上下文。
+                </div>
+              </div>
+            )}
+
+            {selfFix && (
+              <div className="plan-result" style={{ marginTop: 8 }}>
+                <div className="plan-result-head">
+                  <span>自查整改 · 检索到 {selfFix.hitCount} 段资料</span>
+                  <span style={{ display: 'flex', gap: 6 }}>
+                    <button className="count-chip" onClick={applySelfFix}>
+                      应用
+                    </button>
+                    <button className="count-chip" onClick={() => setSelfFix(null)}>
+                      关闭
+                    </button>
+                  </span>
+                </div>
+                <div className="plan-result-body">
+                  {selfFix.changes.length === 0 && <div>没有发现需要改的地方。</div>}
+                  {selfFix.changes.map((c, i) => (
+                    <div className="selffix-row" key={i}>
+                      <span
+                        className={`facts-flag${
+                          c.verdict === 'fixed' ? ' must' : c.verdict === 'ok' ? ' ok' : ''
+                        }`}
+                      >
+                        {c.verdict === 'fixed' ? '已改' : c.verdict === 'ok' ? '符合' : '资料未覆盖'}
+                      </span>
+                      <div>
+                        <div>{c.point}</div>
+                        {c.action && (
+                          <div className="selffix-action">
+                            {c.action}
+                            {c.source ? `（依据：${c.source}）` : ''}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

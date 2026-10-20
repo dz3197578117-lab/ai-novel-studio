@@ -1107,6 +1107,54 @@ describe('DSH 一键导入', () => {
   });
 });
 
+describe('写前自查整改', () => {
+  let projectId = '';
+  let chapterId = '';
+
+  before(async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '自查测试' })).body);
+    projectId = p.id;
+    const c = JSON.parse(
+      (
+        await post(`/api/projects/${projectId}/chapters`, {
+          title: '第1章 · 冷院',
+          outline: '太监上门收六两冬衣钱',
+        })
+      ).body,
+    );
+    chapterId = c.id;
+  });
+
+  test('无大纲时拒绝自查', async () => {
+    const c = JSON.parse(
+      (await post(`/api/projects/${projectId}/chapters`, { title: '第2章 · 空' })).body,
+    );
+    const res = await post(`/api/chapters/${c.id}/self-fix`, {});
+    assert.equal(res.statusCode, 400);
+  });
+
+  test('未配置模型时返回 412', async () => {
+    const p = JSON.parse(
+      (
+        await post('/api/profiles', {
+          name: '自查无 Key',
+          baseUrl: 'https://nokey.example.com/v1',
+          apiKey: '',
+          model: 'm',
+        })
+      ).body,
+    );
+    await post(`/api/profiles/${p.id}/activate`);
+    const res = await post(`/api/chapters/${chapterId}/self-fix`, {});
+    assert.equal(res.statusCode, 412);
+  });
+
+  test('章节不存在返回 404', async () => {
+    const res = await post('/api/chapters/nope/self-fix', {});
+    assert.equal(res.statusCode, 404);
+  });
+});
+
 describe('未配置模型时的写作接口', () => {
   test('当前配置没有 Key 时写作返回 412', async () => {
     // 造一个没有 Key 的配置并设为当前

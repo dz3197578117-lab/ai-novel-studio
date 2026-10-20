@@ -972,6 +972,26 @@ input[type='number']::-webkit-inner-spin-button {
   color: var(--accent);
   border-color: var(--accent);
 }
+.facts-flag.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+/* 自查整改结果条目 */
+.selffix-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-top: 1px dashed var(--border);
+}
+.selffix-row:first-child {
+  border-top: none;
+}
+.selffix-action {
+  font-size: 11px;
+  color: #8b93a1;
+  line-height: 1.7;
+  margin-top: 2px;
+}
 .facts-hits {
   margin-top: 3px;
   display: flex;

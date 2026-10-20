@@ -567,6 +567,26 @@ export interface FactSheet {
   generatedAt: string;
 }
 
+/** AI 自查整改：按检索到的资料修订大纲/细纲 */
+export interface SelfFixResult {
+  /** 修订后的大纲（无改动时与原值相同） */
+  outline: string;
+  /** 修订后的细纲（原章节没有细纲时为空） */
+  beats: string;
+  /** 每处改动的依据，便于作者判断是否采纳 */
+  changes: {
+    point: string;
+    /** ok=原写法符合资料；fixed=已按资料改；unknown=资料未覆盖，按硬约束推断 */
+    verdict: 'ok' | 'fixed' | 'unknown';
+    action: string;
+    /** 引用的资料名（如果有） */
+    source?: string;
+  }[];
+  /** 本次检索到的资料片段数 */
+  hitCount: number;
+  generatedAt: string;
+}
+
 /** 一致性检查沉淀下来的写作约束：下一章起生效，直到标记已解决 */
 export interface WritingConstraint {
   id: ID;
