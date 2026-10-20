@@ -1,4 +1,4 @@
-import type { NarrativePov, Project } from '@novelforge/shared';
+import type { Chapter, NarrativePov, Project } from '@novelforge/shared';
 
 export const POV_LABEL: Record<NarrativePov, string> = {
   auto: '未指定（由文风与正文推断）',
@@ -54,16 +54,34 @@ const MARKER_RULE = '必须有可辨识的标记：空行分节、小节标题�
  * 关键：给的是「默认视角 + 例外条款」，不是「全书唯一视角」。
  * 长篇不可能一种视角写到底——限死会把合法的场景切换也判成错误，
  * 模型真遇到需要换视角的段落时会硬撑，写出别扭的「假装不知道」。
+ *
+ * chapter 传进来时按「本章覆盖 > 项目默认」取值：楔子、序章、尾声可以单独设。
  * 未指定（auto）时返回 null，保持老作品行为不变。
  */
-export function buildPovGuide(project: Project): string | null {
-  const pov = (project.pov ?? 'auto') as NarrativePov;
-  if (pov === 'auto') return null;
+export function buildPovGuide(project: Project, chapter?: Chapter): string | null {
+  const projectPov = (project.pov ?? 'auto') as NarrativePov;
+  const override = (chapter?.pov ?? null) as NarrativePov | null;
+  const effective = override ?? projectPov;
+  if (effective === 'auto') return null;
+
+  // 本章单独设了视角：只给这一章的规则，不再套项目的「允许切换」清单
+  if (override) {
+    const isException = override !== projectPov;
+    return [
+      `**本章**为「${povLabel(override)}」${
+        isException && projectPov !== 'auto'
+          ? `（项目默认是「${povLabel(projectPov)}」，本章是例外）`
+          : ''
+      }。`,
+      ...RULES[override as FixedPov].map((r) => `- ${r}`),
+      '- 本章之内守住上面的信息边界；确实要换视角时另起一节并加标记',
+    ].join('\n');
+  }
 
   const switchRule = (project.povNote ?? '').trim();
   const lines = [
-    `本书**默认**「${povLabel(pov)}」，单个场景之内保持这个视角。`,
-    ...RULES[pov as FixedPov].map((r) => `- ${r}`),
+    `本书**默认**「${povLabel(effective)}」，单个场景之内保持这个视角。`,
+    ...RULES[effective as FixedPov].map((r) => `- ${r}`),
     '',
     '**允许的切换**：',
     switchRule
@@ -82,25 +100,41 @@ export function buildPovGuide(project: Project): string | null {
 
 /**
  * 给一致性检查用的判定标准。
- * 必须区分「合法切换」和「越界」——否则检查器会把正常的多视角写法全判成违规。
+ * 必须区分「合法切换」和「越界」，否则检查器会把正常的多视角写法全判成违规。
+ * overrides 是单独设了视角的章节（楔子、序章等），检查时按各自的视角判断。
  */
-export function buildPovCheckNote(project: Project): string {
+export function buildPovCheckNote(
+  project: Project,
+  overrides: { title: string; pov: NarrativePov }[] = [],
+): string {
   const pov = (project.pov ?? 'auto') as NarrativePov;
+
+  const lines: string[] = [];
   if (pov === 'auto') {
-    return '本书未指定视角。先推断正文实际人称（「我」还是「他」），再查前后是否一致。';
+    lines.push('本书未指定视角。先推断正文实际人称（「我」还是「他」），再查前后是否一致。');
+  } else {
+    const switchRule = (project.povNote ?? '').trim();
+    lines.push(
+      `本书默认「${povLabel(pov)}」。`,
+      switchRule
+        ? `作者声明的切换规则：${switchRule}`
+        : `作者未声明额外规则，只允许在${DEFAULT_SWITCH_SLOTS}。`,
+      '判定标准：',
+      `- 切换落在上述规则之内、且${MARKER_RULE} → 不报`,
+      '- 切换在规则之内但没有标记，读者分不清谁在看 → 报 medium',
+      '- 切换不在规则之内，或发生在同一场景内 → 报 medium',
+      '- 场景内跳进非视角人物内心（head-hopping）→ 报 high',
+      '- 只写视角人物感知不到的信息（他不在场、听不到、看不见）→ 报 high',
+    );
   }
 
-  const switchRule = (project.povNote ?? '').trim();
-  return [
-    `本书默认「${povLabel(pov)}」。`,
-    switchRule
-      ? `作者声明的切换规则：${switchRule}`
-      : `作者未声明额外规则，只允许在${DEFAULT_SWITCH_SLOTS}。`,
-    '判定标准：',
-    `- 切换落在上述规则之内、且${MARKER_RULE} → 不报`,
-    '- 切换在规则之内但没有标记，读者分不清谁在看 → 报 medium',
-    '- 切换不在规则之内，或发生在同一场景内 → 报 medium',
-    '- 场景内跳进非视角人物内心（head-hopping）→ 报 high',
-    '- 只写视角人物感知不到的信息（他不在场、听不到、看不见）→ 报 high',
-  ].join('\n');
+  if (overrides.length > 0) {
+    lines.push(
+      '',
+      '以下章节单独设了视角（楔子/序章等），按各自视角判断，**不要按项目默认报错**：',
+      ...overrides.map((o) => `- ${o.title}：${povLabel(o.pov)}`),
+    );
+  }
+
+  return lines.join('\n');
 }

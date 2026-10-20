@@ -24,6 +24,7 @@ interface ChapterRow {
   summary: string;
   beats: string | null;
   facts: string | null;
+  pov: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +52,7 @@ const toChapter = (r: ChapterRow): Chapter => ({
   summary: r.summary,
   beats: r.beats ?? '',
   facts: parseFacts(r.facts),
+  pov: r.pov ? (r.pov as Chapter['pov']) : null,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
@@ -190,6 +192,16 @@ export interface ChapterInput {
   content?: string;
   status?: ChapterStatus;
   beats?: string;
+  /** 本章视角覆盖；null 表示继承项目默认 */
+  pov?: Chapter['pov'];
+}
+
+/**
+ * 标题像楔子/序章就默认全知——这类章节通常是以上帝视角交代前史。
+ * 只影响新建时的初值，作者随时可以改。
+ */
+function defaultPovForTitle(title: string): string {
+  return /^(楔子|序章|序幕|引子|序言|前言)/.test(title.trim()) ? 'third-omniscient' : '';
 }
 
 export function createChapter(projectId: ID, input: ChapterInput): Chapter {
@@ -201,8 +213,8 @@ export function createChapter(projectId: ID, input: ChapterInput): Chapter {
     .get(projectId) as { m: number };
   const content = input.content ?? '';
   db.prepare(
-    `INSERT INTO chapters (id, project_id, volume_id, title, sort_order, outline, content, status, word_count, summary, beats, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO chapters (id, project_id, volume_id, title, sort_order, outline, content, status, word_count, summary, beats, pov, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
   ).run(
     id,
     projectId,
@@ -215,6 +227,7 @@ export function createChapter(projectId: ID, input: ChapterInput): Chapter {
     countWords(content),
     '',
     input.beats ?? '',
+    input.pov === undefined ? defaultPovForTitle(input.title) : (input.pov ?? ''),
     ts,
     ts,
   );
@@ -227,7 +240,7 @@ export function updateChapter(id: ID, patch: Partial<ChapterInput>): Chapter | n
   const db = getDb();
   const content = patch.content ?? cur.content;
   db.prepare(
-    `UPDATE chapters SET volume_id=?, title=?, outline=?, content=?, status=?, word_count=?, beats=?, updated_at=? WHERE id=?`,
+    `UPDATE chapters SET volume_id=?, title=?, outline=?, content=?, status=?, word_count=?, beats=?, pov=?, updated_at=? WHERE id=?`,
   ).run(
     patch.volumeId === undefined ? cur.volumeId : patch.volumeId,
     patch.title ?? cur.title,
@@ -236,6 +249,7 @@ export function updateChapter(id: ID, patch: Partial<ChapterInput>): Chapter | n
     patch.status ?? cur.status,
     countWords(content),
     patch.beats ?? cur.beats ?? '',
+    patch.pov === undefined ? (cur.pov ?? '') : (patch.pov ?? ''),
     nowIso(),
     id,
   );

@@ -1,7 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNovel } from '../store/novel';
 import { api } from '../api/client';
-import type { Chapter, FactPoint, FactSheet, Scene, WritingConstraint } from '@novelforge/shared';
+import type {
+  Chapter,
+  FactPoint,
+  FactSheet,
+  NarrativePov,
+  Scene,
+  WritingConstraint,
+} from '@novelforge/shared';
+
+/** 章节级视角可选项（不含 auto：章节只能继承或明确指定） */
+const POV_CHOICES: { value: NarrativePov; label: string }[] = [
+  { value: 'first', label: '第一人称限知' },
+  { value: 'third-limited', label: '第三人称限知' },
+  { value: 'third-omniscient', label: '第三人称全知' },
+  { value: 'multi', label: '多视角轮换' },
+];
+
+const POV_TEXT: Record<string, string> = {
+  auto: '未指定',
+  first: '第一人称限知',
+  'third-limited': '第三人称限知',
+  'third-omniscient': '第三人称全知',
+  multi: '多视角轮换',
+};
 
 /**
  * 编辑区本地状态快照。
@@ -84,6 +107,7 @@ function snippetAround(text: string, query: string, len = 80): string {
 /** 中间：章节正文编辑器 */
 export function Editor() {
   const chapter = useNovel((s) => s.currentChapter);
+  const project = useNovel((s) => s.project);
   const loadChapter = useNovel((s) => s.loadChapter);
   const refresh = useNovel((s) => s.refresh);
   const setError = useNovel((s) => s.setError);
@@ -110,6 +134,9 @@ export function Editor() {
   const [factSheet, setFactSheet] = useState<FactSheet | null>(null);
   const [factBusy, setFactBusy] = useState(false);
   const [showFacts, setShowFacts] = useState(false);
+
+  // 本章视角覆盖（null = 继承项目默认）
+  const [povOverride, setPovOverride] = useState<NarrativePov | null>(null);
 
   // 一致性检查沉淀下来的写作约束
   const [constraints, setConstraints] = useState<WritingConstraint[]>([]);
@@ -182,6 +209,9 @@ export function Editor() {
       .get<Scene[]>(`/api/chapters/${chapter.id}/scenes`)
       .then(setScenes)
       .catch(() => setScenes([]));
+
+    // 纯视角覆盖，独立保存
+    setPovOverride((chapter.pov ?? null) as NarrativePov | null);
 
     // 事实清单随章节切换重置（命中资料不落库，切回来要重新生成才有）
     setFacts(chapter.facts ?? []);
@@ -335,6 +365,17 @@ export function Editor() {
       setError(`保存失败，内容已暂存在本地：${(e as Error).message}`);
     } finally {
       setSaving(false);
+    }
+  }
+
+  /** 切换本章视角（不影响其他章节） */
+  async function changePov(next: NarrativePov | null) {
+    if (!chapter) return;
+    setPovOverride(next);
+    try {
+      await api.patch<Chapter>(`/api/chapters/${chapter.id}`, { pov: next });
+    } catch (e) {
+      setError((e as Error).message);
     }
   }
 
@@ -557,6 +598,41 @@ export function Editor() {
                 markEdit({ outline: e.target.value });
               }}
             />
+          </div>
+
+          {/* 本章视角：楔子/序章这类特殊章节可单独覆盖 */}
+          <div className="field" style={{ marginBottom: 0, marginTop: 10 }}>
+            <label
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span>本章视角</span>
+              <select
+                value={povOverride ?? ''}
+                onChange={(e) =>
+                  void changePov(e.target.value ? (e.target.value as NarrativePov) : null)
+                }
+                style={{ maxWidth: 230 }}
+              >
+                <option value="">
+                  继承项目（{POV_TEXT[project?.pov ?? 'auto'] ?? '未指定'}）
+                </option>
+                {POV_CHOICES.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {povOverride && (
+              <div className="hint" style={{ marginTop: 4 }}>
+                本章单独用「{POV_TEXT[povOverride]}」，其他章节仍按项目默认。
+              </div>
+            )}
           </div>
 
           {/* 写前事实核查：AI 先说清要核实什么，再检索资料 */}

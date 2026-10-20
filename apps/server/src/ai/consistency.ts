@@ -157,7 +157,12 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 ${rules ? `\n## 作者硬约束（最高优先级，违反即算错误）\n${rules}` : ''}
 
 ## 叙述视角设定
-${buildPovCheckNote(project)}
+${buildPovCheckNote(
+  project,
+  chapters
+    .filter((c) => c.pov)
+    .map((c) => ({ title: c.title, pov: c.pov! })),
+)}
 ${knowledgeText ? `\n## 作者提供的参考资料（可据此校对史实/制度）\n${knowledgeText}` : ''}
 
 ## 设定条目（共 ${entities.length} 条，节选前 40 条）

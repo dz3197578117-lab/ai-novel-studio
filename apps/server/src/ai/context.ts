@@ -110,7 +110,7 @@ export function buildContext(params: {
   }
 
   // 0.1 叙述视角守则：设定后是硬规则，优先级仅次于作者硬约束
-  const povGuide = buildPovGuide(project);
+  const povGuide = buildPovGuide(project, chapter);
   if (povGuide) {
     const povBlock = required('视角守则', povGuide, REQUIRED_CAP.pov);
     if (povBlock) blocks.push(`## 叙述视角（硬性规则）\n${povBlock}`);

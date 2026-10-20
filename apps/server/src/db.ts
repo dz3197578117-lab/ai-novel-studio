@@ -229,8 +229,16 @@ function migrate(d: DatabaseSync): void {
     version = 6;
   }
 
+  if (version < 7) {
+    // 章节级视角覆盖：空串表示继承项目默认（楔子、序章、尾声用）
+    if (!hasColumn(d, 'chapters', 'pov')) {
+      d.exec(`ALTER TABLE chapters ADD COLUMN pov TEXT NOT NULL DEFAULT '';`);
+    }
+    version = 7;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
-    d.exec('COMMIT');
+  d.exec('COMMIT');
   } catch (e) {
     try {
       d.exec('ROLLBACK');

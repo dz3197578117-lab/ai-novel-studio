@@ -50,6 +50,11 @@ export const chapterInput = z.object({
   content: z.string().max(2_000_000).optional(),
   status: z.enum(['outline', 'drafting', 'revising', 'done']).optional(),
   beats: z.string().max(50_000).optional(),
+  /** 本章视角覆盖；null = 继承项目默认 */
+  pov: z
+    .enum(['first', 'third-limited', 'third-omniscient', 'multi'])
+    .nullable()
+    .optional(),
 });
 
 /** 场景卡 */

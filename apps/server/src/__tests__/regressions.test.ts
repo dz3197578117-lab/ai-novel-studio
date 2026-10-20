@@ -268,3 +268,47 @@ test('未写切换规则时给出默认口子（换章/分节/时空跳转）', 
   assert.ok(ctx.system.includes('章节开头'));
   assert.ok(ctx.system.includes('分节'));
 });
+
+// ───────────── 章节级视角覆盖 ─────────────
+
+test('标题是楔子/序章的新章节自动设为全知', () => {
+  const p = createProject({ title: '楔子自动', pov: 'third-limited' });
+  const prologue = createChapter(p.id, { title: '楔子' });
+  const normal = createChapter(p.id, { title: '第一章 雪夜' });
+  assert.equal(prologue.pov, 'third-omniscient');
+  assert.equal(normal.pov, null, '普通章节应继承项目默认');
+});
+
+test('章节视角覆盖项目默认，守则改成「本章」', () => {
+  const p = createProject({ title: '覆盖生效', pov: 'third-limited' });
+  const c = createChapter(p.id, { title: '楔子', outline: '交代二十年前那场大火' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+
+  assert.ok(ctx.system.includes('第三人称全知'), '应用本章的全知守则');
+  assert.ok(ctx.system.includes('本章'), '应标明是本章的视角');
+  assert.ok(!ctx.system.includes('本书**默认**'), '覆盖时不该再套项目默认');
+});
+
+test('普通章节仍用项目默认视角', () => {
+  const p = createProject({ title: '继承默认', pov: 'third-limited' });
+  const c = createChapter(p.id, { title: '第一章', outline: 'o' });
+  const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
+  assert.ok(ctx.system.includes('本书**默认**'));
+  assert.ok(ctx.system.includes('允许的切换'));
+});
+
+test('一致性检查会列出单独设了视角的章节', () => {
+  const p = createProject({ title: '检查覆盖', pov: 'third-limited' });
+  const pro = createChapter(p.id, { title: '楔子', outline: 'o' });
+  const c1 = createChapter(p.id, { title: '第一章', outline: 'o' });
+
+  const prompt = buildConsistencyPrompt({
+    project: getProject(p.id)!,
+    entities: [],
+    chapters: [getChapter(pro.id)!, getChapter(c1.id)!],
+    foreshadows: [],
+    timeline: [],
+  });
+  assert.ok(prompt.user.includes('楔子：第三人称全知'));
+  assert.ok(prompt.user.includes('不要按项目默认报错'));
+});

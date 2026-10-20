@@ -139,6 +139,11 @@ export interface Chapter extends Timestamped {
   beats?: string;
   /** 写作前归纳的待核实事实点，生成时用来检索作者资料 */
   facts?: FactPoint[];
+  /**
+   * 本章视角覆盖；null 表示继承项目默认。
+   * 楔子、序章、尾声这类特殊章节可以单独设成别的视角。
+   */
+  pov?: NarrativePov | null;
 }
 
 // ─────────────────────────── AI 配置与生成 ───────────────────────────
