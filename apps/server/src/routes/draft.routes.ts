@@ -32,6 +32,7 @@ import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js
 import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/client.js';
 import { createJob, getJob, patchJob, runJob } from '../services/jobs.js';
 import { buildSettingBrief } from '../ai/briefing.js';
+import { transaction } from '../db.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
 import { createEntity } from '../repos/entities.repo.js';
 import {
@@ -604,25 +605,28 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
 
       const volumes = listVolumes(project.id);
       let volumeId = parsed.data.volumeId ?? null;
-      // 指定了已存在的卷就用它，否则新建
-      if (!volumeId || !volumes.some((v) => v.id === volumeId)) {
-        const created = createVolume(
-          project.id,
-          parsed.data.volumeTitle,
-          parsed.data.volumeSummary ?? '',
-        );
-        volumeId = created.id;
-      }
+      // 整批写入放在一个事务里：中途失败不会留下半卷章节
+      transaction(() => {
+        // 指定了已存在的卷就用它，否则新建
+        if (!volumeId || !volumes.some((v) => v.id === volumeId)) {
+          const created = createVolume(
+            project.id,
+            parsed.data.volumeTitle,
+            parsed.data.volumeSummary ?? '',
+          );
+          volumeId = created.id;
+        }
 
-      for (const c of parsed.data.chapters) {
-        createChapter(project.id, {
-          title: c.title,
-          volumeId,
-          outline: c.outline ?? '',
-          content: '',
-          status: 'outline',
-        });
-      }
+        for (const c of parsed.data.chapters) {
+          createChapter(project.id, {
+            title: c.title,
+            volumeId,
+            outline: c.outline ?? '',
+            content: '',
+            status: 'outline',
+          });
+        }
+      });
 
       return reply.code(201).send({
         counts: { volumeId, chapters: parsed.data.chapters.length },
@@ -844,25 +848,28 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const volumeIds: string[] = [];
-    for (const v of parsed.data.volumes ?? []) {
-      const created = createVolume(project.id, v.title, v.summary ?? '');
-      volumeIds.push(created.id);
-    }
-
     let count = 0;
-    for (const c of parsed.data.chapters) {
-      const volumeId = volumeIds.length
-        ? volumeIds[Math.min(c.volumeIndex, volumeIds.length - 1)] ?? null
-        : null;
-      createChapter(project.id, {
-        title: c.title,
-        volumeId,
-        outline: c.outline ?? '',
-        content: '',
-        status: 'outline',
-      });
-      count++;
-    }
+    // 卷与章节一次性写入，避免失败时只写进一半目录
+    transaction(() => {
+      for (const v of parsed.data.volumes ?? []) {
+        const created = createVolume(project.id, v.title, v.summary ?? '');
+        volumeIds.push(created.id);
+      }
+
+      for (const c of parsed.data.chapters) {
+        const volumeId = volumeIds.length
+          ? volumeIds[Math.min(c.volumeIndex, volumeIds.length - 1)] ?? null
+          : null;
+        createChapter(project.id, {
+          title: c.title,
+          volumeId,
+          outline: c.outline ?? '',
+          content: '',
+          status: 'outline',
+        });
+        count++;
+      }
+    });
 
     return reply.code(201).send({
       counts: { volumes: volumeIds.length, chapters: count },
@@ -882,46 +889,52 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     }
     const draft = parsed.data as NovelDraft;
 
-    const project = createProject({
-      title: draft.title,
-      logline: draft.logline ?? '',
-      genre: draft.genre ?? '',
-      styleGuide: draft.styleGuide ?? '',
-      status: 'drafting',
-    });
-
-    // 设定
-    for (const e of draft.entities ?? []) {
-      createEntity(project.id, {
-        type: e.type,
-        name: e.name,
-        aliases: e.aliases,
-        summary: e.summary,
-        fields: e.fields,
-        body: e.body,
-        pinned: e.pinned,
-      });
-    }
-
-    // 卷（记录下标到 id 的映射）
+    // 整本书（作品 + 设定 + 卷 + 最多 1000 章）一次性写入。
+    // 之前逐条裸写：中途失败会留下半本书，且 1000 章要 9 秒（每章 3 条同步 SQL）。
     const volumeIds: string[] = [];
-    for (const v of draft.volumes ?? []) {
-      const created = createVolume(project.id, v.title, v.summary ?? '');
-      volumeIds.push(created.id);
-    }
-
-    // 章节
-    for (const c of draft.chapters) {
-      const volumeId =
-        volumeIds.length > 0 ? (volumeIds[c.volumeIndex] ?? volumeIds[0] ?? null) : null;
-      createChapter(project.id, {
-        title: c.title,
-        volumeId,
-        outline: c.outline ?? '',
-        content: '',
-        status: 'outline',
+    const project = transaction(() => {
+      const p = createProject({
+        title: draft.title,
+        logline: draft.logline ?? '',
+        genre: draft.genre ?? '',
+        styleGuide: draft.styleGuide ?? '',
+        status: 'drafting',
       });
-    }
+
+      // 设定
+      for (const e of draft.entities ?? []) {
+        createEntity(p.id, {
+          type: e.type,
+          name: e.name,
+          aliases: e.aliases,
+          summary: e.summary,
+          fields: e.fields,
+          body: e.body,
+          pinned: e.pinned,
+        });
+      }
+
+      // 卷（记录下标到 id 的映射）
+      for (const v of draft.volumes ?? []) {
+        const created = createVolume(p.id, v.title, v.summary ?? '');
+        volumeIds.push(created.id);
+      }
+
+      // 章节
+      for (const c of draft.chapters) {
+        const volumeId =
+          volumeIds.length > 0 ? (volumeIds[c.volumeIndex] ?? volumeIds[0] ?? null) : null;
+        createChapter(p.id, {
+          title: c.title,
+          volumeId,
+          outline: c.outline ?? '',
+          content: '',
+          status: 'outline',
+        });
+      }
+
+      return p;
+    });
 
     return reply.code(201).send({
       project: getProject(project.id) as Project,

@@ -259,13 +259,26 @@ export function searchKnowledge(projectId: ID, query: string, limit = 5): Knowle
   for (let i = 0; i < cjk.length - 1; i++) terms.add(cjk.slice(i, i + 2));
   if (terms.size === 0) terms.add(lower);
 
+  /**
+   * 先在 SQL 里用 LIKE 粗筛，只把可能命中的片段读进内存再精算分数。
+   * 之前是把该项目下全部片段拉出来逐条 includes —— 资料库一大，
+   * 每次续写都要 hydrate 上万行并阻塞事件循环。
+   */
+  const probes = [...terms].slice(0, 40);
+  const esc = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
+  const where = probes.map(() => `c.text LIKE ? ESCAPE '\\'`).join(' OR ');
+
   const rows = getDb()
     .prepare(
       `SELECT c.*, d.title AS doc_title, d.source AS doc_source
        FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c.doc_id
-       WHERE c.project_id = ?`,
+       WHERE c.project_id = ? AND (${where})
+       LIMIT 2000`,
     )
-    .all(projectId) as unknown as (ChunkRow & { doc_title: string; doc_source: string })[];
+    .all(projectId, ...probes.map((t) => `%${esc(t)}%`)) as unknown as (ChunkRow & {
+    doc_title: string;
+    doc_source: string;
+  })[];
 
   const scored = rows
     .map((r) => {

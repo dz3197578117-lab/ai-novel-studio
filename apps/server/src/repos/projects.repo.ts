@@ -139,6 +139,14 @@ export function deleteProject(id: ID): boolean {
   return Number(res.changes) > 0;
 }
 
+/** 该项目下所有图片的相对路径（删除作品时用来清理磁盘文件） */
+export function listProjectImageUrls(projectId: ID): string[] {
+  const rows = getDb()
+    .prepare('SELECT url FROM images WHERE project_id = ?')
+    .all(projectId) as { url: string }[];
+  return rows.map((r) => r.url);
+}
+
 export function touchProject(id: ID): void {
   getDb().prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(nowIso(), id);
 }

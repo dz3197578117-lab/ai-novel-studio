@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { Document, Packer, Paragraph, HeadingLevel, AlignmentType, TextRun } from 'docx';
 import type { Chapter, ExportFormat } from '@novelforge/shared';
-import { getChapter, listChapters, listVolumes } from '../repos/chapters.repo.js';
+import { listChapters, listChaptersWithContent, listVolumes } from '../repos/chapters.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { exportRequest } from './schemas.js';
 
@@ -20,13 +20,11 @@ export async function exportRoutes(app: FastifyInstance): Promise<void> {
     }
     const { format, chapterIds, includeOutline } = parsed.data;
 
-    const summaries = listChapters(project.id);
-    const targets = chapterIds?.length
-      ? summaries.filter((c) => chapterIds.includes(c.id))
-      : summaries;
-    const chapters: Chapter[] = targets
-      .map((c) => getChapter(c.id))
-      .filter((c): c is Chapter => c !== null);
+    // 一条查询取完正文：原来先 listChapters 再逐章 getChapter，1000 章要 1001 次查询
+    const chapters = listChaptersWithContent(
+      project.id,
+      chapterIds?.length ? chapterIds : undefined,
+    );
 
     const volumes = listVolumes(project.id);
     const volTitle = (id: string | null) =>

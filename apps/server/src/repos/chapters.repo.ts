@@ -53,7 +53,20 @@ const toChapter = (r: ChapterRow): Chapter => ({
   updatedAt: r.updated_at,
 });
 
-const toChapterSummary = (r: ChapterRow): ChapterSummary => ({
+/** 章节摘要行：显式不含 content，避免把整本书正文读进内存 */
+type ChapterSummaryRow = Pick<
+  ChapterRow,
+  | 'id'
+  | 'project_id'
+  | 'volume_id'
+  | 'title'
+  | 'sort_order'
+  | 'word_count'
+  | 'status'
+  | 'updated_at'
+>;
+
+const toChapterSummary = (r: ChapterSummaryRow): ChapterSummary => ({
   id: r.id,
   projectId: r.project_id,
   volumeId: r.volume_id,
@@ -117,10 +130,34 @@ export function deleteVolume(id: ID): boolean {
 // ───────────────────────── 章节 ─────────────────────────
 
 export function listChapters(projectId: ID): ChapterSummary[] {
+  // 只取摘要需要的列：之前用 SELECT * 会把每章正文一起读出来再丢掉，
+  // 上千章时会白白占用几十 MB 内存并阻塞事件循环。
   const rows = getDb()
+    .prepare(
+      `SELECT id, project_id, volume_id, title, sort_order, word_count, status, updated_at
+       FROM chapters WHERE project_id = ? ORDER BY sort_order, created_at`,
+    )
+    .all(projectId) as unknown as ChapterSummaryRow[];
+  return rows.map(toChapterSummary);
+}
+
+/** 一次查出整本书的完整章节（导出、备份用），避免逐章 N+1 查询 */
+export function listChaptersWithContent(projectId: ID, ids?: ID[]): Chapter[] {
+  const db = getDb();
+  if (ids && ids.length > 0) {
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT * FROM chapters WHERE project_id = ? AND id IN (${placeholders})
+         ORDER BY sort_order, created_at`,
+      )
+      .all(projectId, ...ids) as unknown as ChapterRow[];
+    return rows.map(toChapter);
+  }
+  const rows = db
     .prepare('SELECT * FROM chapters WHERE project_id = ? ORDER BY sort_order, created_at')
     .all(projectId) as unknown as ChapterRow[];
-  return rows.map(toChapterSummary);
+  return rows.map(toChapter);
 }
 
 export function getChapter(id: ID): Chapter | null {

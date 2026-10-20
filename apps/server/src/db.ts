@@ -21,12 +21,14 @@ export function getDb(): DatabaseSync {
   return db;
 }
 
-/** 迁移：用 user_version 递增，所有建表语句集中在此，便于演进 */
+/** user_version 递增迁移。整体包在事务里：失败则全部回滚，不会留下半套表 */
 function migrate(d: DatabaseSync): void {
   const row = d.prepare('PRAGMA user_version').get() as { user_version: number };
   let version = row.user_version ?? 0;
 
-  if (version < 1) {
+  d.exec('BEGIN');
+  try {
+    if (version < 1) {
     d.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
@@ -137,9 +139,14 @@ function migrate(d: DatabaseSync): void {
 
   if (version < 3) {
     // 分层创作（脑暴/细纲/场景卡）+ 作者知识库
+    // 先探测列：旧版本可能执行过 ALTER 但没推进 user_version（迁移无事务时期留下的）
+    if (!hasColumn(d, 'projects', 'brainstorm')) {
+      d.exec(`ALTER TABLE projects ADD COLUMN brainstorm TEXT NOT NULL DEFAULT '';`);
+    }
+    if (!hasColumn(d, 'chapters', 'beats')) {
+      d.exec(`ALTER TABLE chapters ADD COLUMN beats TEXT NOT NULL DEFAULT '';`);
+    }
     d.exec(`
-      ALTER TABLE projects ADD COLUMN brainstorm TEXT NOT NULL DEFAULT '';
-      ALTER TABLE chapters ADD COLUMN beats TEXT NOT NULL DEFAULT '';
 
       CREATE TABLE IF NOT EXISTS scenes (
         id TEXT PRIMARY KEY,
@@ -184,11 +191,54 @@ function migrate(d: DatabaseSync): void {
 
   if (version < 4) {
     // 项目级硬约束：考据规则、制度设定、写作禁令（每次生成都会注入）
-    d.exec(`ALTER TABLE projects ADD COLUMN rules TEXT NOT NULL DEFAULT '';`);
+    if (!hasColumn(d, 'projects', 'rules')) {
+      d.exec(`ALTER TABLE projects ADD COLUMN rules TEXT NOT NULL DEFAULT '';`);
+    }
     version = 4;
   }
 
   d.exec(`PRAGMA user_version = ${version}`);
+    d.exec('COMMIT');
+  } catch (e) {
+    try {
+      d.exec('ROLLBACK');
+    } catch {
+      /* 回滚失败时保留原始错误 */
+    }
+    throw e;
+  }
+}
+
+/** 列是否已存在（迁移幂等用） */
+function hasColumn(d: DatabaseSync, table: string, column: string): boolean {
+  const rows = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return rows.some((r) => r.name === column);
+}
+
+/**
+ * 在单个事务里执行一组写操作；抛错自动回滚。
+ * 支持嵌套调用（内层直接复用外层事务）。
+ */
+let txDepth = 0;
+export function transaction<T>(fn: () => T): T {
+  if (txDepth > 0) return fn();
+  const d = getDb();
+  txDepth++;
+  d.exec('BEGIN');
+  try {
+    const out = fn();
+    d.exec('COMMIT');
+    return out;
+  } catch (e) {
+    try {
+      d.exec('ROLLBACK');
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  } finally {
+    txDepth--;
+  }
 }
 
 /** 测试用：内存库 */

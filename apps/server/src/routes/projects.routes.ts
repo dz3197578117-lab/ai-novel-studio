@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { IMAGES_DIR } from '../config.js';
 import {
   createProject,
   deleteProject,
   getProject,
+  listProjectImageUrls,
   listProjects,
   listProjectsOverview,
   updateProject,
@@ -66,8 +70,16 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       entities: listEntities(project.id),
     });
 
+    // 图片文件不在数据库里 CASCADE，必须手动清，否则 images 目录只增不减
+    const imageFiles = listProjectImageUrls(project.id).map((u) => path.basename(u));
+
     const ok = deleteProject(project.id);
     if (!ok) return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+
+    await Promise.all(
+      imageFiles.map((f) => fs.unlink(path.join(IMAGES_DIR, f)).catch(() => undefined)),
+    );
+
     return { ok: true };
   });
 }

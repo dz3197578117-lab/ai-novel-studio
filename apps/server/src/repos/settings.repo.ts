@@ -143,7 +143,13 @@ export function getActiveProfile(): StoredProfile | null {
   const id = getActiveProfileId();
   const list = getProfiles();
   const found = id ? list.find((p) => p.id === id) : null;
-  return found ?? list[0] ?? null;
+  if (found) return found;
+
+  // 指针指向已删除的配置时回退到第一条，并顺手修正指针。
+  // 不修正的话 /api/settings 会继续返回这个脏 id，界面高亮 A、实际用 B。
+  const fallback = list[0] ?? null;
+  if (fallback && id !== fallback.id) setActiveProfileId(fallback.id);
+  return fallback;
 }
 
 /** 转成模型客户端需要的结构 */
