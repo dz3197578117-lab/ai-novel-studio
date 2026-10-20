@@ -1157,3 +1157,52 @@ input[type='number']::-webkit-inner-spin-button {
 ::-webkit-scrollbar-thumb:hover {
   background: #445;
 }
+
+/* 方案预览里的行内编辑：看起来像文字，聚焦时才显出输入框 */
+.inline-edit {
+  background: transparent;
+  border: none;
+  border-bottom: 1px dashed transparent;
+  padding: 1px 0;
+  color: inherit;
+  font: inherit;
+  width: 100%;
+  outline: none;
+}
+.inline-edit:hover {
+  border-bottom-color: var(--border);
+}
+.inline-edit:focus {
+  border-bottom-color: var(--accent);
+}
+.draft-title-input {
+  font-size: 18px;
+  font-weight: 600;
+}
+.draft-volume-input {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 8px 0 2px;
+}
+.draft-chapter-row .inline-edit {
+  flex: 1;
+  min-width: 0;
+}
+.draft-chapter-outline {
+  width: 100%;
+  resize: vertical;
+  min-height: 40px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  color: var(--muted);
+  outline: none;
+}
+.draft-chapter-outline:focus {
+  border-color: var(--accent);
+}

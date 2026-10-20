@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { InterviewReply, NovelDraft, Project } from '@novelforge/shared';
+import type {
+  DraftChapter,
+  DraftEntity,
+  InterviewReply,
+  NovelDraft,
+  Project,
+} from '@novelforge/shared';
 import { useNovel } from '../store/novel';
 import { api } from '../api/client';
 import { Modal } from './Modal';
@@ -36,6 +42,44 @@ const GREETING: Msg = {
 const STARTERS = ['古典玄幻', '都市悬疑', '科幻末世', '古代言情', '历史权谋'];
 
 /**
+ * 方案草稿：生成一次可能要跑几分钟，误关窗口不该白跑。
+ * 存在本地，24 小时内重开还能接着改；建书或主动放弃时清掉。
+ */
+const DRAFT_KEY = 'novelforge:draft-preview';
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function loadSavedDraft(): NovelDraft | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as { at?: number; draft?: NovelDraft };
+    if (!o?.draft || Date.now() - (o.at ?? 0) > DRAFT_TTL_MS) {
+      localStorage.removeItem(DRAFT_KEY);
+      return null;
+    }
+    return o.draft;
+  } catch {
+    return null;
+  }
+}
+
+function saveDraftLocal(d: NovelDraft): void {
+  try {
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ at: Date.now(), draft: d }));
+  } catch {
+    /* 配额满了就算了，不能因为缓存失败打断主流程 */
+  }
+}
+
+function clearSavedDraft(): void {
+  try {
+    localStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * AI 生成小说：先对话聊需求，聊清楚再出方案，确认后建书。
  * 对话式的好处是不用一次想全，AI 会问你类型、主角、基调这些。
  */
@@ -64,8 +108,54 @@ export function AiNovelDialog({
   const [regenIndex, setRegenIndex] = useState<number | null>(null);
   /** 生成计时：章数多时要跑几分钟，让用户看得见还在动 */
   const [elapsed, setElapsed] = useState(0);
+  /** 这份方案是从本地草稿恢复的 */
+  const [restored, setRestored] = useState(false);
 
   const chatRef = useRef<HTMLDivElement | null>(null);
+
+  // 打开时尝试恢复上次未建书的方案
+  useEffect(() => {
+    if (!open) return;
+    setRestored(false);
+    if (draft) return;
+    const saved = loadSavedDraft();
+    if (saved) {
+      setDraft(saved);
+      setRestored(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // 方案有任何改动就落本地，避免误关丢失
+  useEffect(() => {
+    if (draft) saveDraftLocal(draft);
+  }, [draft]);
+
+  /** 改动方案里的字段（预览区全部可编辑） */
+  function patch(p: Partial<NovelDraft>) {
+    setDraft((d) => (d ? { ...d, ...p } : d));
+  }
+  function patchEntity(i: number, p: Partial<DraftEntity>) {
+    setDraft((d) =>
+      d ? { ...d, entities: d.entities.map((e, j) => (j === i ? { ...e, ...p } : e)) } : d,
+    );
+  }
+  function removeEntity(i: number) {
+    setDraft((d) => (d ? { ...d, entities: d.entities.filter((_, j) => j !== i) } : d));
+  }
+  function patchChapter(i: number, p: Partial<DraftChapter>) {
+    setDraft((d) =>
+      d ? { ...d, chapters: d.chapters.map((c, j) => (j === i ? { ...c, ...p } : c)) } : d,
+    );
+  }
+  function removeChapter(i: number) {
+    setDraft((d) => (d ? { ...d, chapters: d.chapters.filter((_, j) => j !== i) } : d));
+  }
+  function patchVolume(i: number, title: string) {
+    setDraft((d) =>
+      d ? { ...d, volumes: d.volumes.map((v, j) => (j === i ? { ...v, title } : v)) } : d,
+    );
+  }
   const chapterCount = clampCount(Number(chapterInput));
 
   // 每次打开都从新对话开始
@@ -176,6 +266,7 @@ export function AiNovelDialog({
     setCreating(true);
     try {
       const res = await api.post<{ project: Project }>('/api/projects/from-draft', { draft });
+      clearSavedDraft();
       onClose();
       await onCreated(res.project.id);
     } catch (e) {
@@ -301,36 +392,83 @@ export function AiNovelDialog({
         </>
       ) : (
         <>
+          {restored && (
+            <div
+              className="hint"
+              style={{
+                marginBottom: 8,
+                padding: '6px 10px',
+                borderRadius: 6,
+                background: 'var(--accent-soft)',
+                color: 'var(--accent)',
+              }}
+            >
+              已恢复上次未建书的方案。
+              <button
+                className="ghost"
+                style={{ marginLeft: 8, padding: '0 6px', fontSize: 11 }}
+                onClick={() => {
+                  clearSavedDraft();
+                  setDraft(null);
+                  setRestored(false);
+                }}
+              >
+                不要了，重新开始
+              </button>
+            </div>
+          )}
+
           <div className="draft-head">
-            <div>
-              <div className="draft-title">{draft.title}</div>
+            <div style={{ flex: 1 }}>
+              <input
+                className="inline-edit draft-title-input"
+                value={draft.title}
+                onChange={(e) => patch({ title: e.target.value })}
+                placeholder="书名"
+              />
               <div className="draft-sub">
-                {draft.genre || '未分类'} · {draft.volumes.length} 卷 · {draft.chapters.length} 章
+                <input
+                  className="inline-edit"
+                  style={{ width: 90 }}
+                  value={draft.genre}
+                  onChange={(e) => patch({ genre: e.target.value })}
+                  placeholder="题材"
+                />
+                {` · ${draft.volumes.length} 卷 · ${draft.chapters.length} 章`}
                 {requestedCount && draft.chapters.length !== requestedCount && (
                   <span className="draft-warn">
-                    （你要求 {requestedCount} 章，AI 给了 {draft.chapters.length} 章）
+                    （你要求 {requestedCount} 章，当前 {draft.chapters.length} 章）
                   </span>
                 )}
               </div>
             </div>
           </div>
 
-          {draft.logline && <div className="draft-logline">{draft.logline}</div>}
-
-          {draft.styleGuide && (
-            <div className="field">
-              <label>文风要求</label>
-              <div className="draft-block">{draft.styleGuide}</div>
-            </div>
-          )}
+          <div className="field">
+            <label>一句话简介</label>
+            <textarea
+              rows={2}
+              value={draft.logline}
+              onChange={(e) => patch({ logline: e.target.value })}
+              placeholder="主角是谁，想要什么，阻力是什么"
+            />
+          </div>
 
           <div className="field">
-            <label>叙述视角（AI 建议，可改）</label>
+            <label>文风要求（会作为之后每次生成的基准）</label>
+            <textarea
+              rows={3}
+              value={draft.styleGuide}
+              onChange={(e) => patch({ styleGuide: e.target.value })}
+              placeholder="叙述冷峻克制，白描为主，少用形容词"
+            />
+          </div>
+
+          <div className="field">
+            <label>叙述视角</label>
             <select
               value={draft.pov ?? 'third-limited'}
-              onChange={(e) =>
-                setDraft({ ...draft, pov: e.target.value as NovelDraft['pov'] })
-              }
+              onChange={(e) => patch({ pov: e.target.value as NovelDraft['pov'] })}
               style={{ width: '100%' }}
             >
               <option value="third-limited">第三人称限知（跟一个角色）</option>
@@ -338,56 +476,101 @@ export function AiNovelDialog({
               <option value="third-omniscient">第三人称全知</option>
               <option value="multi">多视角轮换</option>
             </select>
-            {draft.povNote && (
-              <div className="hint" style={{ marginTop: 4 }}>
-                切换规则：{draft.povNote}
-              </div>
-            )}
+            <input
+              className="inline-edit"
+              style={{ marginTop: 6 }}
+              value={draft.povNote ?? ''}
+              onChange={(e) => patch({ povNote: e.target.value })}
+              placeholder="允许的切换（可选）：每卷最后一章切到反派视角，另起一节并以人名开头"
+            />
           </div>
 
-          {draft.entities.length > 0 && (
-            <div className="field">
-              <label>设定的 {draft.entities.length} 个条目</label>
-              <div className="draft-entities">
-                {draft.entities.map((e, i) => (
-                  <div className="draft-entity" key={`${e.name}-${i}`}>
+          <div className="field">
+            <label>
+              设定条目（{draft.entities.length}）· 名称与摘要可直接改，× 删除
+            </label>
+            <div className="draft-entities">
+              {draft.entities.map((e, i) => (
+                <div className="draft-entity" key={i}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span className="tag">{TYPE_LABEL[e.type] ?? e.type}</span>
-                    <span className="draft-entity-name">{e.name}</span>
+                    <input
+                      className="inline-edit"
+                      value={e.name}
+                      onChange={(ev) => patchEntity(i, { name: ev.target.value })}
+                      placeholder="名称"
+                    />
                     {e.pinned && <span className="pin">固定</span>}
-                    <div className="summary">{e.summary}</div>
+                    <button
+                      className="ghost"
+                      style={{ padding: '0 6px', fontSize: 12 }}
+                      onClick={() => removeEntity(i)}
+                      title="删除这条设定"
+                    >
+                      ×
+                    </button>
                   </div>
-                ))}
-              </div>
+                  <input
+                    className="inline-edit"
+                    style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}
+                    value={e.summary}
+                    onChange={(ev) => patchEntity(i, { summary: ev.target.value })}
+                    placeholder="一句话摘要"
+                  />
+                </div>
+              ))}
             </div>
-          )}
+          </div>
 
           <div className="field">
-            <label>卷章大纲（单章不满意可以单独重做）</label>
+            <label>卷章大纲（标题与大纲可直接改；不满意的单章可重做或删掉）</label>
             <div className="draft-outline">
               {draft.volumes.map((v, vi) => (
-                <div key={`${v.title}-${vi}`}>
-                  <div className="draft-volume">{v.title}</div>
+                <div key={vi}>
+                  <input
+                    className="inline-edit draft-volume-input"
+                    value={v.title}
+                    onChange={(e) => patchVolume(vi, e.target.value)}
+                    placeholder="卷名"
+                  />
                   {draft.chapters
-                    .filter((c) => c.volumeIndex === vi)
-                    .map((c) => {
-                      const globalIndex = draft.chapters.indexOf(c);
-                      return (
-                        <div className="draft-chapter" key={`${c.title}-${globalIndex}`}>
-                          <div className="draft-chapter-row">
-                            <div className="draft-chapter-title">{c.title}</div>
-                            <button
-                              className="count-chip draft-regen"
-                              disabled={regenIndex !== null}
-                              onClick={() => void regenChapter(globalIndex)}
-                              title="只重做这一章的大纲"
-                            >
-                              {regenIndex === globalIndex ? '重做中…' : '↻ 重做'}
-                            </button>
-                          </div>
-                          <div className="summary">{c.outline}</div>
+                    .map((c, gi) => ({ c, gi }))
+                    .filter(({ c }) => c.volumeIndex === vi)
+                    .map(({ c, gi }) => (
+                      <div className="draft-chapter" key={gi}>
+                        <div className="draft-chapter-row">
+                          <input
+                            className="inline-edit"
+                            value={c.title}
+                            onChange={(e) => patchChapter(gi, { title: e.target.value })}
+                            placeholder="章节名"
+                          />
+                          <button
+                            className="count-chip draft-regen"
+                            disabled={regenIndex !== null}
+                            onClick={() => void regenChapter(gi)}
+                            title="只重做这一章的大纲"
+                          >
+                            {regenIndex === gi ? '重做中…' : '↻ 重做'}
+                          </button>
+                          <button
+                            className="ghost"
+                            style={{ padding: '0 6px', fontSize: 12 }}
+                            onClick={() => removeChapter(gi)}
+                            title="删掉这一章"
+                          >
+                            ×
+                          </button>
                         </div>
-                      );
-                    })}
+                        <textarea
+                          className="draft-chapter-outline"
+                          rows={2}
+                          value={c.outline}
+                          onChange={(e) => patchChapter(gi, { outline: e.target.value })}
+                          placeholder="本章梗概"
+                        />
+                      </div>
+                    ))}
                 </div>
               ))}
             </div>
