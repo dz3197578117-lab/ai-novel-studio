@@ -1,10 +1,23 @@
 import type { FastifyInstance } from 'fastify';
-import type { StreamEvent } from '@novelforge/shared';
-import { buildContext, summaryPrompt } from '../ai/context.js';
+import type { StreamEvent, TokenUsage } from '@novelforge/shared';
+import { buildContext, summaryPrompt, CHAPTER_MODES, CHAPTER_WORD_RANGE } from '../ai/context.js';
 import { AiError, complete, loadTextConfig, streamChat } from '../ai/client.js';
+import { countWords } from '../db.js';
 import { getChapter, setChapterSummary, updateChapter } from '../repos/chapters.repo.js';
 import { getProject } from '../repos/projects.repo.js';
 import { writeRequest } from './schemas.js';
+
+/** 去掉模型擅自写在正文开头的章节标题行 */
+export function stripLeadingHeading(text: string): string {
+  return text
+    .replace(/^\s*#{1,6}\s*第[一二三四五六七八九十百千\d]+章[^\n]*\n+/, '')
+    .replace(/^\s*第[一二三四五六七八九十百千\d]+章\s*[·・\-—]?[^\n]*\n+/, '')
+    .replace(/^\s*#{1,6}\s*第[一二三四五六七八九十百千\d]章\s*[^\n]*$/, '')
+    .replace(/^\s*[-—*]{3,}\s*\n+/, '')
+    .trimStart();
+}
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
 export async function writeRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -69,24 +82,93 @@ export async function writeRoutes(app: FastifyInstance): Promise<void> {
     send({ type: 'meta', memoryUsed: ctx.memoryUsed });
 
     let full = '';
-    try {
+    let usage: TokenUsage | undefined;
+
+    /**
+     * 章节模式：先把开头一小段扣住，检测到模型擅自加了「第三章 · xxx」这类标题就丢掉。
+     * 直接透传的话标题会混进正文，之后还得手工清。
+     */
+    const isChapterMode = CHAPTER_MODES.includes(mode);
+    let headPending = '';
+    let headDone = false;
+    const pushText = (text: string) => {
+      if (!isChapterMode || headDone) {
+        full += text;
+        send({ type: 'delta', text });
+        return;
+      }
+      headPending += text;
+      if (headPending.length < 120) return;
+      headDone = true;
+      const cleaned = stripLeadingHeading(headPending);
+      headPending = '';
+      if (cleaned) {
+        full += cleaned;
+        send({ type: 'delta', text: cleaned });
+      }
+    };
+    const flushHead = () => {
+      if (!isChapterMode || headDone) return;
+      headDone = true;
+      const cleaned = stripLeadingHeading(headPending);
+      headPending = '';
+      if (cleaned) {
+        full += cleaned;
+        send({ type: 'delta', text: cleaned });
+      }
+    };
+
+    const streamOnce = async (messages: ChatMessage[]) => {
       for await (const chunk of streamChat({
         config,
-        messages: [
-          { role: 'system', content: ctx.system },
-          { role: 'user', content: ctx.user },
-        ],
+        messages,
         signal: controller.signal,
       })) {
         if (chunk.type === 'delta') {
-          full += chunk.text;
-          send({ type: 'delta', text: chunk.text });
+          pushText(chunk.text);
         } else if (chunk.type === 'usage') {
-          send({ type: 'done', fullText: full, usage: chunk.usage });
-          full = '';
+          usage = chunk.usage;
         }
       }
-      if (full) send({ type: 'done', fullText: full });
+    };
+
+    try {
+      await streamOnce([
+        { role: 'system', content: ctx.system },
+        { role: 'user', content: ctx.user },
+      ]);
+
+      // 整章太短就自动续写，直到达到下限或轮数用完
+      if (isChapterMode) {
+        for (let round = 0; round < 3; round++) {
+          flushHead();
+          const have = countWords(full);
+          if (have >= CHAPTER_WORD_RANGE.min) break;
+          if (controller.signal.aborted) break;
+
+          const want = Math.max(
+            800,
+            Math.min(CHAPTER_WORD_RANGE.min + 500, CHAPTER_WORD_RANGE.max) - have,
+          );
+          const tail = full.slice(-1600);
+          send({ type: 'meta', memoryUsed: [] });
+          await streamOnce([
+            { role: 'system', content: ctx.system },
+            {
+              role: 'user',
+              content:
+                `你正在写同一章的正文，目前写到 ${have} 字。请**直接从断点继续写**：\n` +
+                `- 不要重复已写内容，不要重新开头，不要写章节标题\n` +
+                `- 保持人称、称谓与文风不变\n` +
+                `- 这一轮再写约 ${want} 字，把本章该发生的事写完，结尾留钩子\n\n` +
+                `## 已写正文的最后部分\n${tail}\n\n直接续写正文。`,
+            },
+          ]);
+        }
+        flushHead();
+      }
+
+      send({ type: 'done', fullText: full, usage });
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         send({ type: 'error', message: (e as Error).message });
