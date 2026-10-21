@@ -127,7 +127,8 @@ export function buildContext(params: {
   }
 
   // 0.2 一致性检查沉淀下来的约束：上一轮错过的，本轮别再犯
-  const openConstraints = listOpenConstraints(project.id, 6);
+  // 只取本章已生效的约束（不会把第 50 章的问题塞进第 3 章），最多 8 条
+  const openConstraints = listOpenConstraints(project.id, 8, chapter.order);
   if (openConstraints.length > 0) {
     const constraintsBlock = required(
       '写作约束',

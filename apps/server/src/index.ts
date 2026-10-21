@@ -20,6 +20,7 @@ import {
 import { getDb } from './db.js';
 import { startAutoBackup } from './repos/backup.js';
 import { markRunningJobsInterrupted } from './services/jobs.js';
+import { reindexKnowledgeIfNeeded } from './repos/layers.repo.js';
 import { projectRoutes } from './routes/projects.routes.js';
 import { entityRoutes } from './routes/entities.routes.js';
 import { chapterRoutes } from './routes/chapters.routes.js';
@@ -144,6 +145,8 @@ async function main() {
   getDb();
   // 上次没跑完的后台任务不可能自动续跑，标成 interrupted，保留已生成的部分
   markRunningJobsInterrupted();
+  // v9 之前的知识库没有重叠分块/倒排索引，启动时重建一次
+  reindexKnowledgeIfNeeded();
   // 数据库定期自动备份（有作品被误删后无从恢复的教训）
   startAutoBackup();
   const app = await buildServer();

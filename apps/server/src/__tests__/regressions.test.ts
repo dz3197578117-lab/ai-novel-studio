@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { NovelDraft } from '@novelforge/shared';
+import type { Chapter, NovelDraft, Project } from '@novelforge/shared';
 
 /**
  * 针对本轮修复的回归测试。
@@ -16,7 +16,7 @@ const { getDb, transaction } = await import('../db.js');
 const { buildContext } = await import('../ai/context.js');
 const { parseFactPoints } = await import('../ai/facts.js');
 const { joinUrl, takeSseEvent } = await import('../ai/client.js');
-const { buildConsistencyPrompt } = await import('../ai/consistency.js');
+const { buildConsistencyPrompt, sampleChaptersForCheck } = await import('../ai/consistency.js');
 const { parseDraft, parseRefine } = await import('../ai/draft.js');
 const { createProject, getProject, listProjects } = await import('../repos/projects.repo.js');
 const {
@@ -28,10 +28,12 @@ const {
   setChapterSummary,
   listPriorSummaries,
 } = await import('../repos/chapters.repo.js');
-const { addConstraints, listOpenConstraints, setConstraintStatus } = await import(
+const { addConstraints, listConstraints, listOpenConstraints, setConstraintStatus } = await import(
   '../repos/constraints.repo.js'
 );
-const { createDoc, searchKnowledge } = await import('../repos/layers.repo.js');
+const { chunkText, createDoc, deleteDoc, reindexKnowledgeIfNeeded, searchKnowledge } = await import(
+  '../repos/layers.repo.js'
+);
 const { cancelJob, createJob, getJob, markRunningJobsInterrupted, patchJob } = await import(
   '../services/jobs.js'
 );
@@ -284,17 +286,17 @@ test('未写切换规则时给出默认口子（换章/分节/时空跳转）', 
 
 // ───────────── 章节级视角覆盖 ─────────────
 
-test('标题是楔子/序章的新章节自动设为全知', () => {
-  const p = createProject({ title: '楔子自动', pov: 'third-limited' });
+test('楔子/序章不再自动改成全知，默认继承项目视角', () => {
+  const p = createProject({ title: '楔子继承', pov: 'first' });
   const prologue = createChapter(p.id, { title: '楔子' });
   const normal = createChapter(p.id, { title: '第一章 雪夜' });
-  assert.equal(prologue.pov, 'third-omniscient');
+  assert.equal(prologue.pov, null, '第一人称作品的楔子不应被强制全知');
   assert.equal(normal.pov, null, '普通章节应继承项目默认');
 });
 
 test('章节视角覆盖项目默认，守则改成「本章」', () => {
   const p = createProject({ title: '覆盖生效', pov: 'third-limited' });
-  const c = createChapter(p.id, { title: '楔子', outline: '交代二十年前那场大火' });
+  const c = createChapter(p.id, { title: '楔子', outline: '交代二十年前那场大火', pov: 'third-omniscient' });
   const ctx = buildContext({ project: getProject(p.id)!, chapter: c, mode: 'continue' });
 
   assert.ok(ctx.system.includes('第三人称全知'), '应用本章的全知守则');
@@ -312,7 +314,7 @@ test('普通章节仍用项目默认视角', () => {
 
 test('一致性检查会列出单独设了视角的章节', () => {
   const p = createProject({ title: '检查覆盖', pov: 'third-limited' });
-  const pro = createChapter(p.id, { title: '楔子', outline: 'o' });
+  const pro = createChapter(p.id, { title: '楔子', outline: 'o', pov: 'third-omniscient' });
   const c1 = createChapter(p.id, { title: '第一章', outline: 'o' });
 
   const prompt = buildConsistencyPrompt({
@@ -545,4 +547,125 @@ test('服务重启把 running 任务标成 interrupted，部分结果不丢', ()
   const after = getJob<{ done: number }>(job.id);
   assert.equal(after?.status, 'interrupted');
   assert.deepEqual(after?.result, { done: 2 });
+});
+
+
+// ───────────── P1：约束作用域/过期、全书抽样、引用落库、重叠分块 ─────────────
+
+test('后期发现的约束不会注入到早期章节', () => {
+  const p = createProject({ title: '约束作用域' });
+  addConstraints(p.id, null, [{ text: '第 50 章之后才成立的规则' }], { applyFromOrder: 50 });
+
+  const early = listOpenConstraints(p.id, 8, 3);
+  assert.ok(!early.some((c) => c.text.includes('第 50 章')), '第 3 章不该收到后期限定');
+
+  const later = listOpenConstraints(p.id, 8, 50);
+  assert.ok(later.some((c) => c.text.includes('第 50 章')), '第 50 章应收到');
+});
+
+test('过期约束自动标记解决，不再注入', () => {
+  const p = createProject({ title: '约束过期' });
+  addConstraints(p.id, null, [{ text: '这条已经过期' }], { ttlDays: -1 });
+  const open = listOpenConstraints(p.id, 8, 999);
+  assert.equal(open.length, 0);
+  const all = listConstraints(p.id, 'all', 10);
+  assert.equal(all.find((c) => c.text === '这条已经过期')?.status, 'resolved');
+});
+
+test('千章一致性检查会抽样早期章节，而不是只看最后 40 章', () => {
+  const chapters = Array.from({ length: 300 }, (_, i) => ({
+    id: `c${i}`,
+    projectId: 'p',
+    volumeId: null,
+    title: `第${i + 1}章`,
+    order: i,
+    outline: `大纲 ${i}`,
+    content: i === 299 ? '最后一章正文' : '',
+    status: 'done',
+    wordCount: 0,
+    summary: `摘要 ${i}`,
+    createdAt: '',
+    updatedAt: '',
+  })) as Chapter[];
+
+  const sample = sampleChaptersForCheck(chapters);
+  assert.ok(sample.selected.length < chapters.length, '不应该把 300 章全塞进上下文');
+  assert.ok(sample.selected.some((c) => c.order === 0), '应包含开篇第 1 章');
+  assert.ok(sample.selected.some((c) => c.order === 299), '应包含最后一章');
+  assert.ok(sample.selected.length >= 40, '抽样也要够覆盖全书');
+
+  const prompt = buildConsistencyPrompt({
+    project: { id: 'p', title: '千章', logline: '', genre: '', styleGuide: '', targetWords: 0, status: 'drafting', createdAt: '', updatedAt: '' } as Project,
+    entities: [],
+    chapters,
+    foreshadows: [],
+    timeline: [],
+  });
+  assert.match(prompt.user, /全书抽样/);
+  assert.match(prompt.user, /第1章/);
+});
+
+test('事实核查单的引用片段会落库并随章节读回', () => {
+  const p = createProject({ title: '引用落库' });
+  const c = createChapter(p.id, { title: '第一章' });
+  setChapterFacts(
+    c.id,
+    [{ point: '京畿府名', query: '顺天府', mustHave: true }],
+    {
+      hits: [{ forPoints: ['京畿府名'], docTitle: '制度备忘', source: '史实.md', text: '明代设顺天府。' }],
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  );
+  const loaded = getChapter(c.id)!;
+  assert.equal(loaded.factSheet?.hits.length, 1);
+  assert.equal(loaded.factSheet?.hits[0]?.docTitle, '制度备忘');
+  assert.equal(loaded.factSheet?.generatedAt, '2026-01-01T00:00:00.000Z');
+});
+
+test('重叠分块：相邻片段共享尾部，跨边界事实不会丢', () => {
+  const para1 = '甲'.repeat(80);
+  const para2 = '乙'.repeat(80);
+  const chunks = chunkText(`${para1}\n\n${para2}`, 100, 20);
+  assert.ok(chunks.length >= 2);
+  assert.ok(chunks[1]!.startsWith(chunks[0]!.slice(-20)), '下一段应以上一段尾部开头');
+});
+
+test('知识库倒排索引随文档创建/删除同步', () => {
+  const p = createProject({ title: '倒排索引' });
+  const doc = createDoc(p.id, { title: '资料', content: '明代京畿设顺天府，不称京兆府。' });
+  const terms = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM knowledge_terms WHERE project_id = ?')
+    .get(p.id) as { n: number };
+  assert.ok(terms.n > 0, '应写入倒排词');
+
+  const hit = searchKnowledge(p.id, '顺天府', 3);
+  assert.ok(hit.length > 0, '应能通过索引召回');
+
+  deleteDoc(doc.id);
+  const after = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM knowledge_terms WHERE project_id = ?')
+    .get(p.id) as { n: number };
+  assert.equal(after.n, 0, '删除资料后倒排词也应清空');
+});
+
+
+test('旧资料缺少倒排索引时，启动重建能补齐', () => {
+  const p = createProject({ title: '索引重建' });
+  const doc = createDoc(p.id, { title: '旧资料', content: '明代京畿设顺天府，不称京兆府。' });
+
+  // 模拟 v9 之前的数据：有片段、没有倒排词、没有版本标记
+  getDb().prepare('DELETE FROM knowledge_terms WHERE project_id = ?').run(p.id);
+  getDb().prepare("DELETE FROM settings WHERE key = 'knowledge_index_version'").run();
+
+  reindexKnowledgeIfNeeded();
+
+  const terms = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM knowledge_terms WHERE project_id = ?')
+    .get(p.id) as { n: number };
+  assert.ok(terms.n > 0, '重建后应有倒排词');
+  const chunks = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM knowledge_chunks WHERE doc_id = ?')
+    .get(doc.id) as { n: number };
+  assert.ok(chunks.n > 0, '片段应保留/重建');
+  assert.ok(searchKnowledge(p.id, '顺天府', 3).length > 0);
 });

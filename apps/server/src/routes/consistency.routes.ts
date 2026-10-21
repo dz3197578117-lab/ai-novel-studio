@@ -148,6 +148,9 @@ export async function consistencyRoutes(app: FastifyInstance): Promise<void> {
          * 检查不该只是一份看完就忘的报告——它得影响下一章怎么写。
          */
         const high = report.issues.filter((i) => i.severity === 'high');
+        // 本次检查发现问题时全书已写到第几章：约束从「下一章」开始生效，
+        // 这样用户回头重写旧章节时，不会被后文才出现的规则干扰。
+        const nextOrder = chapters.reduce((max, c) => Math.max(max, c.order), -1) + 1;
         const synced = high.length
           ? addConstraints(
               project.id,
@@ -156,6 +159,7 @@ export async function consistencyRoutes(app: FastifyInstance): Promise<void> {
                 text: `${i.title}${i.suggestion ? `｜建议：${i.suggestion}` : ''}`.slice(0, 400),
                 severity: 'high' as const,
               })),
+              { applyFromOrder: nextOrder },
             )
           : 0;
 

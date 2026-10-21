@@ -139,6 +139,8 @@ export interface Chapter extends Timestamped {
   beats?: string;
   /** 写作前归纳的待核实事实点，生成时用来检索作者资料 */
   facts?: FactPoint[];
+  /** 事实核查单（含引用片段），落库后刷新页面也能看到出处 */
+  factSheet?: FactSheet;
   /**
    * 本章视角覆盖；null 表示继承项目默认。
    * 楔子、序章、尾声这类特殊章节可以单独设成别的视角。
@@ -622,6 +624,13 @@ export interface WritingConstraint {
   text: string;
   severity: IssueSeverity;
   status: 'open' | 'resolved';
+  /**
+   * 从第几章（0-based 的 order + 1，即「下一章」）开始生效。
+   * null 表示全书生效；写早期章节时不会注入后期才发现的问题。
+   */
+  applyFromOrder?: number | null;
+  /** 过期时间；过期的约束不再注入，列表里自动标记为已解决 */
+  expiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

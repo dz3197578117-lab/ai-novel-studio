@@ -17,6 +17,7 @@ interface TocPlan {
   volumes: { title: string; summary: string }[];
   chapters: { volumeIndex: number; title: string; outline: string }[];
   failedBatches?: number;
+  missingChapters?: number;
 }
 
 interface VolumePlan {
@@ -24,6 +25,7 @@ interface VolumePlan {
   volumeSummary: string;
   chapters: { title: string; outline: string }[];
   failedBatches?: number;
+  missingChapters?: number;
 }
 
 interface OutlineResult {
@@ -333,9 +335,13 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
             job.result.chapters.length
           } 章${job.error ? `：${job.error}` : ''}`,
         );
-      } else if (job.result?.failedBatches) {
+      } else if (job.result?.failedBatches || job.result?.missingChapters) {
         setError(
-          `有 ${job.result.failedBatches} 批失败，已生成 ${job.result.chapters.length} 章`,
+          `${job.result.failedBatches ? `${job.result.failedBatches} 批失败` : ''}${
+            job.result.failedBatches && job.result.missingChapters ? '，' : ''
+          }${
+            job.result.missingChapters ? `仍缺 ${job.result.missingChapters} 章` : ''
+          }，已生成 ${job.result.chapters.length} 章`,
         );
       }
     } catch (e) {
@@ -437,9 +443,13 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
             job.result.chapters.length
           } 章${job.error ? `：${job.error}` : ''}`,
         );
-      } else if (job.result?.failedBatches) {
+      } else if (job.result?.failedBatches || job.result?.missingChapters) {
         setError(
-          `有 ${job.result.failedBatches} 批失败，已生成 ${job.result.chapters.length} 章`,
+          `${job.result.failedBatches ? `${job.result.failedBatches} 批失败` : ''}${
+            job.result.failedBatches && job.result.missingChapters ? '，' : ''
+          }${
+            job.result.missingChapters ? `仍缺 ${job.result.missingChapters} 章` : ''
+          }，已生成 ${job.result.chapters.length} 章`,
         );
       }
     } catch (e) {

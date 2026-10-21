@@ -1,4 +1,12 @@
-import type { Chapter, ChapterStatus, ChapterSummary, FactPoint, ID, Volume } from '@novelforge/shared';
+import type {
+  Chapter,
+  ChapterStatus,
+  ChapterSummary,
+  FactPoint,
+  FactSheet,
+  ID,
+  Volume,
+} from '@novelforge/shared';
 import { countWords, getDb, newId, nowIso } from '../db.js';
 import { snapshotChapter } from './versions.repo.js';
 
@@ -25,6 +33,7 @@ interface ChapterRow {
   summary: string;
   beats: string | null;
   facts: string | null;
+  fact_sheet: string | null;
   pov: string | null;
   created_at: string;
   updated_at: string;
@@ -53,10 +62,23 @@ const toChapter = (r: ChapterRow): Chapter => ({
   summary: r.summary,
   beats: r.beats ?? '',
   facts: parseFacts(r.facts),
+  factSheet: parseFactSheet(r.fact_sheet),
   pov: r.pov ? (r.pov as Chapter['pov']) : null,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
+
+/** 事实核查单（含引用片段）；解析失败当作没有，不影响章节本身 */
+function parseFactSheet(raw: string | null): FactSheet | undefined {
+  if (!raw) return undefined;
+  try {
+    const v = JSON.parse(raw) as FactSheet;
+    if (v && Array.isArray(v.points) && Array.isArray(v.hits)) return v;
+  } catch {
+    /* ignore */
+  }
+  return undefined;
+}
 
 /** facts 列存 JSON；解析失败当作空，不让脏数据拖垮整个章节读取 */
 function parseFacts(raw: string | null): FactPoint[] {
@@ -226,14 +248,6 @@ export interface ChapterInput {
   pov?: Chapter['pov'];
 }
 
-/**
- * 标题像楔子/序章就默认全知——这类章节通常是以上帝视角交代前史。
- * 只影响新建时的初值，作者随时可以改。
- */
-function defaultPovForTitle(title: string): string {
-  return /^(楔子|序章|序幕|引子|序言|前言)/.test(title.trim()) ? 'third-omniscient' : '';
-}
-
 export function createChapter(projectId: ID, input: ChapterInput): Chapter {
   const db = getDb();
   const id = newId();
@@ -257,7 +271,7 @@ export function createChapter(projectId: ID, input: ChapterInput): Chapter {
     countWords(content),
     '',
     input.beats ?? '',
-    input.pov === undefined ? defaultPovForTitle(input.title) : (input.pov ?? ''),
+    input.pov ?? '',
     ts,
     ts,
   );
@@ -308,11 +322,24 @@ export function setChapterSummary(id: ID, summary: string): void {
     .run(summary, nowIso(), id);
 }
 
-/** 写入本章的事实核查点（写作时据此检索资料） */
-export function setChapterFacts(id: ID, facts: FactPoint[]): void {
+/**
+ * 写入本章的事实核查单（核查点 + 引用片段）。
+ * 引用片段也落库，刷新页面后仍能看到“这条结论出自哪份资料”。
+ */
+export function setChapterFacts(
+  id: ID,
+  facts: FactPoint[],
+  extra: { hits?: FactSheet['hits']; generatedAt?: string } = {},
+): void {
+  const points = facts.slice(0, 20);
+  const sheet: FactSheet = {
+    points,
+    hits: extra.hits ?? [],
+    generatedAt: extra.generatedAt ?? nowIso(),
+  };
   getDb()
-    .prepare('UPDATE chapters SET facts=?, updated_at=? WHERE id=?')
-    .run(JSON.stringify(facts.slice(0, 20)), nowIso(), id);
+    .prepare('UPDATE chapters SET facts=?, fact_sheet=?, updated_at=? WHERE id=?')
+    .run(JSON.stringify(points), JSON.stringify(sheet), nowIso(), id);
 }
 
 export function deleteChapter(id: ID): boolean {

@@ -242,9 +242,9 @@ export function Editor() {
     // 纯视角覆盖，独立保存
     setPovOverride((chapter.pov ?? null) as NarrativePov | null);
 
-    // 事实清单随章节切换重置（命中资料不落库，切回来要重新生成才有）
-    setFacts(chapter.facts ?? []);
-    setFactSheet(null);
+    // 事实清单与引用片段都已落库，切回来直接显示上次结果
+    setFacts(chapter.factSheet?.points ?? chapter.facts ?? []);
+    setFactSheet(chapter.factSheet ?? null);
     setShowFacts(false);
 
     // 切章后回到顶部

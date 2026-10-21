@@ -149,7 +149,13 @@ export async function factRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/api/chapters/:id/facts', async (req, reply) => {
     const chapter = getChapter(req.params.id);
     if (!chapter) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
-    return { points: chapter.facts ?? [] };
+    return (
+      chapter.factSheet ?? {
+        points: chapter.facts ?? [],
+        hits: [],
+        generatedAt: chapter.updatedAt,
+      }
+    );
   });
 
   /**
@@ -186,13 +192,16 @@ export async function factRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const { points, hits } = await buildFacts(config, project, chapter, useWeb);
-        setChapterFacts(chapter.id, points);
-
         const sheet: FactSheet = {
           points,
           hits,
           generatedAt: new Date().toISOString(),
         };
+        // 引用片段一起落库：刷新后还能看到出处，不用重新花额度生成
+        setChapterFacts(chapter.id, points, {
+          hits: sheet.hits,
+          generatedAt: sheet.generatedAt,
+        });
         return sheet;
       } catch (e) {
         if (e instanceof AiError) {

@@ -36,8 +36,41 @@ const TYPE_LABEL: Record<string, string> = {
   location: '地点',
 };
 
-/** 检查时最多带多少章的梗概 */
-const MAX_CHAPTER_CONTEXT = 40;
+/** 最近多少章全量带 */
+const RECENT_CHAPTERS = 30;
+/** 更早的章节抽样多少条 */
+const OLDER_SAMPLE = 45;
+/** 设定条目最多带多少条（pinned 优先） */
+const MAX_ENTITIES = 60;
+
+/**
+ * 千章书不能只看最后 40 章，否则「第 3 章与第 300 章矛盾」永远查不出来。
+ * 策略：最近 30 章全量 + 更早章节按步长抽样 + 前 3 章必带。
+ */
+export function sampleChaptersForCheck(chapters: Chapter[]): {
+  selected: Chapter[];
+  stride: number;
+  olderCount: number;
+} {
+  const sorted = [...chapters].sort((a, b) => a.order - b.order);
+  if (sorted.length <= RECENT_CHAPTERS + OLDER_SAMPLE) {
+    return { selected: sorted, stride: 1, olderCount: 0 };
+  }
+
+  const older = sorted.slice(0, sorted.length - RECENT_CHAPTERS);
+  const stride = Math.max(1, Math.ceil(older.length / OLDER_SAMPLE));
+  const head = older.slice(0, 3);
+  const sampled = older.filter((_, i) => i % stride === 0);
+  const recent = sorted.slice(-RECENT_CHAPTERS);
+
+  const byId = new Map<string, Chapter>();
+  for (const c of [...head, ...sampled, ...recent]) byId.set(c.id, c);
+  return {
+    selected: [...byId.values()].sort((a, b) => a.order - b.order),
+    stride,
+    olderCount: older.length,
+  };
+}
 
 export interface ConsistencyInput {
   project: Project;
@@ -63,8 +96,10 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
         .join('\n')
     : '';
 
-  const entityLines = entities
-    .slice(0, 40)
+  const entityLines = [...entities]
+    // 固定设定优先：它们通常是人名/世界观主干，最该参与一致性比对
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+    .slice(0, MAX_ENTITIES)
     .map(
       (e) =>
         `- [${TYPE_LABEL[e.type] ?? e.type}] ${e.name}${
@@ -86,14 +121,14 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
     .map((t) => `- ${t.storyTime || '（未标时间）'}｜${t.title}${t.detail ? `：${t.detail}` : ''}`)
     .join('\n');
 
-  const chapterLines = chapters
-    .slice(-MAX_CHAPTER_CONTEXT)
-    .map((c, i) => {
-      const idx = chapters.length - Math.min(MAX_CHAPTER_CONTEXT, chapters.length) + i;
-      return `- 第${idx + 1}章 ${c.title}\n  大纲：${c.outline || '（无）'}\n  摘要：${
-        c.summary || '（无）'
-      }`;
-    })
+  const sample = sampleChaptersForCheck(chapters);
+  const chapterLines = sample.selected
+    .map(
+      (c) =>
+        `- 第${c.order + 1}章 ${c.title}\n  大纲：${c.outline || '（无）'}\n  摘要：${
+          c.summary || '（无）'
+        }`,
+    )
     .join('\n');
 
   // 只带最后一章正文，用来判断当下的写法是否与设定冲突
@@ -106,6 +141,7 @@ export function buildConsistencyPrompt(input: ConsistencyInput): {
 
 你要找出真实存在的矛盾，不要泛泛而谈，也不要编造不存在的问题。
 宁可少报，也不要报没有依据的。
+材料是**全书抽样**：没展示的章节不等于不存在，不要仅凭“某章没提供”就断言矛盾。
 
 检查维度：
 1. character —— 人物性格、动机、能力是否与设定突变
@@ -165,7 +201,7 @@ ${buildPovCheckNote(
 )}
 ${knowledgeText ? `\n## 作者提供的参考资料（可据此校对史实/制度）\n${knowledgeText}` : ''}
 
-## 设定条目（共 ${entities.length} 条，节选前 40 条）
+## 设定条目（共 ${entities.length} 条，节选 ${Math.min(entities.length, MAX_ENTITIES)} 条，固定设定优先）
 ${entityLines || '（暂无）'}
 
 ## 伏笔台账（共 ${foreshadows.length} 条）
@@ -174,10 +210,12 @@ ${fsLines || '（暂无）'}
 ## 时间线（共 ${timeline.length} 条）
 ${tlLines || '（暂无）'}
 
-## 章节梗概（最近 ${Math.min(chapters.length, MAX_CHAPTER_CONTEXT)} 章，共 ${
-    chapters.length
-  } 章）
-${chapterLines || '（暂无）'}
+## 章节梗概（全书抽样 ${sample.selected.length} 章，共 ${chapters.length} 章）
+${
+  sample.stride > 1
+    ? `早期 ${sample.olderCount} 章每 ${sample.stride} 章取 1 章，最近 ${RECENT_CHAPTERS} 章全量。\n`
+    : ''
+}${chapterLines || '（暂无）'}
 ${lastContent ? `\n## 最后一章正文（结尾部分，用于判断当下写法）\n${lastContent}` : ''}
 
 请检查上面这些材料之间是否存在矛盾。`;

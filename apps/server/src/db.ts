@@ -270,6 +270,38 @@ function migrate(d: DatabaseSync): void {
     version = 8;
   }
 
+  if (version < 9) {
+    // 约束按章节生效 + 过期；事实清单的引用片段落库；知识库 2-gram 倒排索引
+    if (!hasColumn(d, 'writing_constraints', 'apply_from_order')) {
+      d.exec(`ALTER TABLE writing_constraints ADD COLUMN apply_from_order INTEGER;`);
+    }
+    if (!hasColumn(d, 'writing_constraints', 'expires_at')) {
+      d.exec(`ALTER TABLE writing_constraints ADD COLUMN expires_at TEXT;`);
+    }
+    if (!hasColumn(d, 'chapters', 'fact_sheet')) {
+      d.exec(`ALTER TABLE chapters ADD COLUMN fact_sheet TEXT NOT NULL DEFAULT '{}';`);
+    }
+    // 旧约束没有作用域：按“当前全书末尾”回填，避免重写旧章节时被后期限定干扰
+    d.exec(`
+      UPDATE writing_constraints
+      SET apply_from_order = (
+        SELECT COALESCE(MAX(c.sort_order) + 1, 0)
+        FROM chapters c WHERE c.project_id = writing_constraints.project_id
+      )
+      WHERE apply_from_order IS NULL;
+    `);
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS knowledge_terms (
+        project_id TEXT NOT NULL,
+        term TEXT NOT NULL,
+        chunk_id TEXT NOT NULL REFERENCES knowledge_chunks(id) ON DELETE CASCADE,
+        PRIMARY KEY (project_id, term, chunk_id)
+      ) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS idx_knowledge_terms_chunk ON knowledge_terms(chunk_id);
+    `);
+    version = 9;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
   d.exec('COMMIT');
   } catch (e) {

@@ -6,7 +6,7 @@ import type {
   Scene,
   SceneInput,
 } from '@novelforge/shared';
-import { getDb, newId, nowIso } from '../db.js';
+import { getDb, newId, nowIso, transaction } from '../db.js';
 
 // ───────────────────────── 场景卡 ─────────────────────────
 
@@ -185,8 +185,11 @@ export function getDoc(id: ID): KnowledgeDoc | null {
   return toDoc(row, n.n);
 }
 
-/** 把长文切成适合检索的片段 */
-export function chunkText(content: string, size = 500): string[] {
+/**
+ * 把长文切成适合检索的片段。
+ * 相邻片段保留 80 字重叠：一个事实刚好跨在两段边界时，两段都能检索到它。
+ */
+export function chunkText(content: string, size = 500, overlap = 80): string[] {
   const paragraphs = content
     .replace(/\r\n/g, '\n')
     .split(/\n{2,}/)
@@ -194,99 +197,150 @@ export function chunkText(content: string, size = 500): string[] {
     .filter(Boolean);
 
   const chunks: string[] = [];
+  const ov = Math.max(0, Math.min(overlap, Math.floor(size / 2)));
   let buf = '';
+
   for (const p of paragraphs) {
-    if ((buf + '\n\n' + p).length > size && buf) {
+    if (buf && (buf + '\n\n' + p).length > size) {
       chunks.push(buf);
-      buf = p;
+      // 下一段带上上一段的尾巴，避免边界信息丢失
+      const tail = ov > 0 ? buf.slice(-ov) : '';
+      buf = tail ? `${tail}\n\n${p}` : p;
     } else {
       buf = buf ? `${buf}\n\n${p}` : p;
     }
-    // 单段超长时硬切
+
+    // 单段超长时硬切，同样保留重叠
     while (buf.length > size * 2) {
       chunks.push(buf.slice(0, size));
-      buf = buf.slice(size);
+      const tail = ov > 0 ? buf.slice(size - ov, size) : '';
+      buf = tail + buf.slice(size);
     }
   }
-  if (buf.trim()) chunks.push(buf);
+  if (buf.trim()) chunks.push(buf.trim());
   return chunks.length ? chunks : [content.slice(0, size)];
+}
+
+/** 中文 2-gram + 英文单词，和检索时的切词保持一致 */
+function indexTerms(text: string): string[] {
+  const terms = new Set<string>();
+  const lower = text.toLowerCase();
+  for (const w of lower.match(/[a-z0-9_]{2,}/g) ?? []) terms.add(w);
+  const cjk = lower.replace(/[^\u4e00-\u9fa5]/g, '');
+  for (let i = 0; i < cjk.length - 1; i++) terms.add(cjk.slice(i, i + 2));
+  return [...terms];
+}
+
+function insertChunkTerms(projectId: ID, chunkId: ID, text: string): void {
+  const stmt = getDb().prepare(
+    'INSERT OR IGNORE INTO knowledge_terms (project_id, term, chunk_id) VALUES (?,?,?)',
+  );
+  for (const term of indexTerms(text)) stmt.run(projectId, term, chunkId);
 }
 
 export function createDoc(projectId: ID, input: KnowledgeDocInput): KnowledgeDoc {
   const db = getDb();
   const id = newId();
   const ts = nowIso();
-  db.prepare(
-    `INSERT INTO knowledge_docs (id, project_id, title, source, tags, content, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?)`,
-  ).run(
-    id,
-    projectId,
-    input.title,
-    input.source ?? '',
-    JSON.stringify(input.tags ?? []),
-    input.content,
-    ts,
-    ts,
-  );
-
   const chunks = chunkText(input.content);
-  const stmt = db.prepare(
-    'INSERT INTO knowledge_chunks (id, doc_id, project_id, chunk_index, text) VALUES (?,?,?,?,?)',
-  );
-  chunks.forEach((text, i) => stmt.run(newId(), id, projectId, i, text));
+
+  // 文档、片段、倒排词一起写：中途失败不会留下“有片段没索引”的半套数据
+  transaction(() => {
+    db.prepare(
+      `INSERT INTO knowledge_docs (id, project_id, title, source, tags, content, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+    ).run(
+      id,
+      projectId,
+      input.title,
+      input.source ?? '',
+      JSON.stringify(input.tags ?? []),
+      input.content,
+      ts,
+      ts,
+    );
+
+    const stmt = db.prepare(
+      'INSERT INTO knowledge_chunks (id, doc_id, project_id, chunk_index, text) VALUES (?,?,?,?,?)',
+    );
+    chunks.forEach((text, i) => {
+      const chunkId = newId();
+      stmt.run(chunkId, id, projectId, i, text);
+      insertChunkTerms(projectId, chunkId, text);
+    });
+  });
 
   return getDoc(id)!;
 }
 
 export function deleteDoc(id: ID): boolean {
-  const res = getDb().prepare('DELETE FROM knowledge_docs WHERE id = ?').run(id);
-  return Number(res.changes) > 0;
+  const db = getDb();
+  let ok = false;
+  transaction(() => {
+    // 先删倒排词，再删文档（chunks 由外键级联删除）
+    db.prepare(
+      'DELETE FROM knowledge_terms WHERE chunk_id IN (SELECT id FROM knowledge_chunks WHERE doc_id = ?)',
+    ).run(id);
+    ok = Number(db.prepare('DELETE FROM knowledge_docs WHERE id = ?').run(id).changes) > 0;
+  });
+  return ok;
 }
 
+const INDEX_VERSION_KEY = 'knowledge_index_version';
+const INDEX_VERSION = '3';
+
 /**
- * 关键词检索：中文按 2-gram 切分，英文按单词。
- * 没有向量模型也能用，够本地单人资料库的场景。
- *
- * 注意 LIKE '%词%' 用不上索引，所以先用较少的 probe 粗筛，再在内存里算分：
- * probe 按词长倒序取——长词更能区分文档，短 2-gram 命中面太宽。
+ * 旧版本资料没有重叠分块，也没有倒排索引。启动时重建一次。
+ * 用 settings 里的版本号控制，之后只跑一次。
  */
-export function searchKnowledge(projectId: ID, query: string, limit = 5): KnowledgeHit[] {
-  const q = query.trim();
-  if (!q) return [];
+export function reindexKnowledgeIfNeeded(): void {
+  const db = getDb();
+  const row = db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get(INDEX_VERSION_KEY) as { value: string } | undefined;
+  if (row) {
+    try {
+      if (JSON.parse(row.value) === INDEX_VERSION) return;
+    } catch {
+      /* 脏值按未建索引处理 */
+    }
+  }
 
-  const terms = new Set<string>();
-  const lower = q.toLowerCase();
-  for (const w of lower.match(/[a-z0-9_]{2,}/g) ?? []) terms.add(w);
-  const cjk = lower.replace(/[^\u4e00-\u9fa5]/g, '');
-  for (let i = 0; i < cjk.length - 1; i++) terms.add(cjk.slice(i, i + 2));
-  if (terms.size === 0) terms.add(lower);
+  transaction(() => {
+    db.exec('DELETE FROM knowledge_terms');
+    db.exec('DELETE FROM knowledge_chunks');
 
-  /**
-   * 先在 SQL 里用 LIKE 粗筛，只把可能命中的片段读进内存再精算分数。
-   * 之前是把该项目下全部片段拉出来逐条 includes —— 资料库一大，
-   * 每次续写都要 hydrate 上万行并阻塞事件循环。
-   */
-  const probes = [...terms].sort((a, b) => b.length - a.length).slice(0, 24);
-  const esc = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
-  const where = probes.map(() => `c.text LIKE ? ESCAPE '\\'`).join(' OR ');
+    const docs = db
+      .prepare('SELECT id, project_id, content FROM knowledge_docs')
+      .all() as unknown as { id: string; project_id: string; content: string }[];
+    const stmt = db.prepare(
+      'INSERT INTO knowledge_chunks (id, doc_id, project_id, chunk_index, text) VALUES (?,?,?,?,?)',
+    );
+    for (const doc of docs) {
+      chunkText(doc.content).forEach((text, i) => {
+        const chunkId = newId();
+        stmt.run(chunkId, doc.id, doc.project_id, i, text);
+        insertChunkTerms(doc.project_id, chunkId, text);
+      });
+    }
 
-  const rows = getDb()
-    .prepare(
-      `SELECT c.doc_id, c.chunk_index, c.text, d.title AS doc_title, d.source AS doc_source
-       FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c.doc_id
-       WHERE c.project_id = ? AND c.text <> '' AND (${where})
-       LIMIT 1200`,
-    )
-    .all(projectId, ...probes.map((t) => `%${esc(t)}%`)) as unknown as {
-    doc_id: string;
-    chunk_index: number;
-    text: string;
-    doc_title: string;
-    doc_source: string;
-  }[];
+    db.prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ).run(INDEX_VERSION_KEY, JSON.stringify(INDEX_VERSION));
+  });
+}
 
-  const scored = rows
+interface ChunkHitRow {
+  doc_id: string;
+  chunk_index: number;
+  text: string;
+  doc_title: string;
+  doc_source: string;
+}
+
+function scoreChunks(rows: ChunkHitRow[], terms: Set<string>, limit: number): KnowledgeHit[] {
+  return rows
     .map((r) => {
       const text = r.text.toLowerCase();
       let matched = 0;
@@ -299,7 +353,6 @@ export function searchKnowledge(projectId: ID, query: string, limit = 5): Knowle
         }
       }
       if (matched === 0) return null;
-      // 覆盖率补偿：短查询只切出几个 2-gram 时，不能靠重复命中刷分
       const coverage = matched / terms.size;
       return {
         docId: r.doc_id,
@@ -313,6 +366,69 @@ export function searchKnowledge(projectId: ID, query: string, limit = 5): Knowle
     .filter((r): r is KnowledgeHit => r !== null)
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
+}
 
-  return scored;
+/**
+ * 关键词检索：中文按 2-gram 切分，英文按单词。
+ *
+ * 主路径走 knowledge_terms 倒排表（project_id + term 有联合主键），
+ * 只把命中片段读进内存再精算；索引尚未覆盖的旧资料回退到 LIKE。
+ */
+export function searchKnowledge(projectId: ID, query: string, limit = 5): KnowledgeHit[] {
+  const q = query.trim();
+  if (!q) return [];
+
+  const terms = new Set<string>();
+  const lower = q.toLowerCase();
+  for (const w of lower.match(/[a-z0-9_]{2,}/g) ?? []) terms.add(w);
+  const cjk = lower.replace(/[^\u4e00-\u9fa5]/g, '');
+  for (let i = 0; i < cjk.length - 1; i++) terms.add(cjk.slice(i, i + 2));
+  if (terms.size === 0) terms.add(lower);
+
+  // 长词更能区分文档；短 2-gram 命中面太宽，排序后限量
+  const probes = [...terms].sort((a, b) => b.length - a.length).slice(0, 24);
+  const db = getDb();
+  const placeholders = probes.map(() => '?').join(',');
+
+  // 1) 倒排索引：按命中词数取候选，再精算
+  try {
+    const indexed = db
+      .prepare(
+        `SELECT chunk_id, COUNT(*) AS hits FROM knowledge_terms
+         WHERE project_id = ? AND term IN (${placeholders})
+         GROUP BY chunk_id ORDER BY hits DESC LIMIT 500`,
+      )
+      .all(projectId, ...probes) as unknown as { chunk_id: string; hits: number }[];
+
+    if (indexed.length > 0) {
+      const ids = indexed.map((r) => r.chunk_id);
+      const marks = ids.map(() => '?').join(',');
+      const rows = db
+        .prepare(
+          `SELECT c.doc_id, c.chunk_index, c.text, d.title AS doc_title, d.source AS doc_source
+           FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c.doc_id
+           WHERE c.id IN (${marks})`,
+        )
+        .all(...ids) as unknown as ChunkHitRow[];
+      const scored = scoreChunks(rows, terms, limit);
+      if (scored.length > 0) return scored;
+    }
+  } catch (e) {
+    // 索引表缺失/旧库未重建时不阻塞生成
+    console.warn('[knowledge] 倒排检索失败，回退 LIKE:', (e as Error).message);
+  }
+
+  // 2) 兜底：索引没覆盖到的旧资料
+  const esc = (s: string) => s.replace(/[\\%_]/g, (m) => `\\${m}`);
+  const where = probes.map(() => `c.text LIKE ? ESCAPE '\\'`).join(' OR ');
+  const rows = db
+    .prepare(
+      `SELECT c.doc_id, c.chunk_index, c.text, d.title AS doc_title, d.source AS doc_source
+       FROM knowledge_chunks c JOIN knowledge_docs d ON d.id = c.doc_id
+       WHERE c.project_id = ? AND c.text <> '' AND (${where})
+       LIMIT 1200`,
+    )
+    .all(projectId, ...probes.map((t) => `%${esc(t)}%`)) as unknown as ChunkHitRow[];
+
+  return scoreChunks(rows, terms, limit);
 }

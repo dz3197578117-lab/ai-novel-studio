@@ -146,7 +146,7 @@ async function retryOnce<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise
   throw lastError;
 }
 
-type DraftWithFailures = NovelDraft & { failedBatches: number };
+type DraftWithFailures = NovelDraft & { failedBatches: number; missingChapters: number };
 
 /** 章节数不多时：一次调用出完整方案 */
 async function generateSingle(
@@ -226,11 +226,18 @@ async function generateChunked(
   const chapters: DraftChapter[] = [];
   let failedBatches = 0;
 
-  for (let start = 0, batch = 1; start < chapterCount; start += batchSize, batch++) {
-    throwIfAborted(signal);
-    const count = Math.min(batchSize, chapterCount - start);
-    const volumeIndexFor = Array.from({ length: count }, (_, i) =>
-      volumeIndexForChapter(start + i, chapterCount, skeleton.volumes.length),
+  /**
+   * 请求一个连续区间的章节。
+   * 返回 null 表示这一批彻底失败；返回条数少于请求条数时由调用方补请求。
+   */
+  const fetchRange = async (
+    rangeStart: number,
+    rangeCount: number,
+    batchNumber: number,
+    previousTitles: string[],
+  ): Promise<DraftChapter[] | null> => {
+    const volumeIndexFor = Array.from({ length: rangeCount }, (_, i) =>
+      volumeIndexForChapter(rangeStart + i, chapterCount, skeleton.volumes.length),
     );
     const prompt = titlesOnly
       ? buildTitleBatchPrompt({
@@ -240,9 +247,9 @@ async function generateChunked(
           idea: req.idea,
           volumeTitles: skeleton.volumes.map((v) => v.title),
           volumeIndexFor,
-          startNumber: start + 1,
-          count,
-          previousTitles: chapters.map((c) => c.title),
+          startNumber: rangeStart + 1,
+          count: rangeCount,
+          previousTitles,
         })
       : buildChapterBatchPrompt({
           idea: req.idea,
@@ -250,10 +257,10 @@ async function generateChunked(
           logline: skeleton.logline,
           volumes: skeleton.volumes,
           volumeIndexFor,
-          startNumber: start + 1,
-          batchNumber: batch,
+          startNumber: rangeStart + 1,
+          batchNumber,
           batchTotal,
-          previousTitles: chapters.map((c) => c.title),
+          previousTitles,
         });
 
     let got: DraftChapter[] | null = null;
@@ -281,24 +288,67 @@ async function generateChunked(
     }
 
     if (!got) {
-      failedBatches += 1;
       console.warn(
-        `[toc] 第 ${batch}/${batchTotal} 批失败，跳过：${lastError?.message ?? '未知错误'}`,
+        `[toc] 第 ${batchNumber}/${batchTotal} 批失败：${lastError?.message ?? '未知错误'}`,
       );
-      onProgress?.(batch, batchTotal, 'failed');
-    } else {
+      return null;
+    }
+    return got.slice(0, rangeCount);
+  };
+
+  for (let start = 0, batch = 1; start < chapterCount; start += batchSize, batch++) {
+    throwIfAborted(signal);
+    const count = Math.min(batchSize, chapterCount - start);
+    const before = chapters.length;
+
+    const got = await fetchRange(
+      start,
+      count,
+      batch,
+      chapters.map((c) => c.title),
+    );
+    if (got && got.length > 0) {
       chapters.push(
-        ...got.slice(0, count).map((c, i) => ({
+        ...got.map((c, i) => ({
           ...c,
           // 模型每批会从「第1章」重新数，这里统一成全书连续编号
           title: renumberChapterTitle(c.title, start + i),
         })),
       );
+    }
+
+    // 模型少给了几章：只对缺的那一段再请求一次，别整批重来
+    if (got && got.length > 0 && got.length < count) {
+      const more = await fetchRange(
+        start + got.length,
+        count - got.length,
+        batch,
+        chapters.map((c) => c.title),
+      );
+      if (more && more.length > 0) {
+        chapters.push(
+          ...more.map((c, i) => ({
+            ...c,
+            title: renumberChapterTitle(c.title, start + got.length + i),
+          })),
+        );
+      }
+    }
+
+    if (chapters.length === before) {
+      failedBatches += 1;
+      onProgress?.(batch, batchTotal, 'failed');
+    } else {
       onProgress?.(batch, batchTotal, 'chapters');
     }
 
     // 每批都回传，调用方可以立刻落库，失败/取消也不丢
-    opts.onPartial?.({ ...skeleton, chapters, failedBatches });
+    opts.onPartial?.({
+      ...skeleton,
+      chapters,
+      failedBatches,
+      missingChapters: chapterCount - chapters.length,
+    });
 
     // 批次之间稍等一下，别把服务商的每分钟额度打满
     if (start + batchSize < chapterCount) {
@@ -306,13 +356,16 @@ async function generateChunked(
     }
   }
 
+  const missingChapters = chapterCount - chapters.length;
   if (chapters.length === 0 && failedBatches > 0) {
     throw new AiError('所有批次的章节都生成失败。可以重试，或把规划章数调小一些。');
   }
+  if (missingChapters > 0) {
+    console.warn(`[toc] 仍缺 ${missingChapters} 章（目标 ${chapterCount}，实际 ${chapters.length}）`);
+  }
 
-  return { ...skeleton, chapters, failedBatches };
+  return { ...skeleton, chapters, failedBatches, missingChapters };
 }
-
 export async function draftRoutes(app: FastifyInstance): Promise<void> {
   /**
    * 对话式需求访谈：AI 反问类型/主角/基调/篇幅，聊清楚后返回 brief。
@@ -516,6 +569,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       volumes: DraftVolume[];
       chapters: DraftChapter[];
       failedBatches: number;
+      missingChapters: number;
     }>(
       'toc',
       {
@@ -530,7 +584,12 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     runJob(job, async (signal) => {
       if (!titlesOnly && chapterCount <= SINGLE_CALL_MAX_CHAPTERS) {
         const draft = await generateSingle(config, request, chapterCount, signal);
-        const result = { volumes: draft.volumes, chapters: draft.chapters, failedBatches: 0 };
+        const result = {
+          volumes: draft.volumes,
+          chapters: draft.chapters,
+          failedBatches: 0,
+          missingChapters: Math.max(0, chapterCount - draft.chapters.length),
+        };
         // 单次生成也要先落库，之后前端轮询/页面重开都能拿到
         patchJob(job.id, { result });
         return result;
@@ -551,11 +610,17 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
                 volumes: d.volumes,
                 chapters: d.chapters,
                 failedBatches: d.failedBatches,
+                missingChapters: d.missingChapters,
               },
             }),
         },
       );
-      return { volumes: draft.volumes, chapters: draft.chapters, failedBatches: draft.failedBatches };
+      return {
+        volumes: draft.volumes,
+        chapters: draft.chapters,
+        failedBatches: draft.failedBatches,
+        missingChapters: draft.missingChapters,
+      };
     });
 
     return reply.code(202).send({
@@ -632,6 +697,7 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       volumeSummary: string;
       chapters: { title: string; outline: string }[];
       failedBatches: number;
+      missingChapters: number;
     }>(
       'volume',
       {
@@ -709,7 +775,60 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
             `[volume] 第 ${batch + 1}/${batchTotal} 批失败，跳过：${lastError?.message ?? '未知错误'}`,
           );
         } else {
-          got.forEach((c, i) =>
+          let all = got;
+
+          // 模型少给了几章：只补缺的那一段
+          if (got.length > 0 && got.length < batchCount) {
+            const missStart = batchStart + got.length;
+            const missCount = batchCount - got.length;
+            const missPrompt = titlesOnly
+              ? buildTitleBatchPrompt({
+                  projectTitle: project.title,
+                  logline: project.logline,
+                  genre: project.genre,
+                  idea,
+                  volumeTitles: [volumeTitle],
+                  volumeIndexFor: Array.from({ length: missCount }, () => 0),
+                  startNumber: missStart,
+                  count: missCount,
+                  previousTitles: [...existing.map((c) => c.title), ...got.map((c) => c.title)],
+                })
+              : buildVolumeChaptersPrompt({
+                  projectTitle: project.title,
+                  logline: project.logline,
+                  genre: project.genre,
+                  styleGuide: project.styleGuide,
+                  volumeTitle,
+                  volumeSummary,
+                  idea,
+                  startNumber: missStart,
+                  count: missCount,
+                  existingTitles: [...existing.map((c) => c.title), ...got.map((c) => c.title)],
+                  instruction: parsed.data.instruction,
+                });
+            try {
+              const content = await completeAccumulated(
+                config,
+                [
+                  { role: 'system', content: missPrompt.system },
+                  { role: 'user', content: missPrompt.user },
+                ],
+                {
+                  maxTokens: draftBudget(config),
+                  signal: callSignal(signal, DRAFT_CALL_TIMEOUT_MS),
+                },
+              );
+              const extra = titlesOnly
+                ? parseTitleBatch(content, 1).map((c) => ({ title: c.title, outline: '' }))
+                : parseVolumeChapters(content);
+              all = [...got, ...extra.slice(0, missCount)];
+            } catch (e) {
+              if (isAbort(e, signal)) throw e;
+              console.warn(`[volume] 补第 ${missStart}–${missStart + missCount - 1} 章失败`);
+            }
+          }
+
+          all.forEach((c, i) =>
             chapters.push({
               // 模型可能每批从「第1章」重数，这里统一成全书连续编号
               title: renumberChapterTitle(c.title, batchStart - 1 + i),
@@ -721,7 +840,13 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
         // 每批落库：失败/取消时前面生成的部分仍可预览并写入
         patchJob(job.id, {
           progress: { done: batch + 1, total: batchTotal, phase: 'chapters' },
-          result: { volumeTitle, volumeSummary, chapters, failedBatches },
+          result: {
+            volumeTitle,
+            volumeSummary,
+            chapters,
+            failedBatches,
+            missingChapters: Math.max(0, count - chapters.length),
+          },
         });
         if (batch + 1 < batchTotal) await sleepAbort(BATCH_DELAY_MS, signal);
       }
@@ -729,7 +854,13 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       if (chapters.length === 0 && failedBatches > 0) {
         throw new AiError('本卷所有批次的章节都生成失败，请稍后重试。');
       }
-      return { volumeTitle, volumeSummary, chapters, failedBatches };
+      return {
+        volumeTitle,
+        volumeSummary,
+        chapters,
+        failedBatches,
+        missingChapters: Math.max(0, count - chapters.length),
+      };
     });
 
     return reply.code(202).send({
