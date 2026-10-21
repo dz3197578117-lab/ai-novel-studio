@@ -1,5 +1,6 @@
 import type { AiProviderConfig, ID, ImageProviderConfig, ModelProfile } from '@novelforge/shared';
 import { getDb, newId, nowIso } from '../db.js';
+import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js';
 
 /** 库里存的样子：带真实 apiKey */
 interface StoredProfile extends ModelProfile {
@@ -41,6 +42,10 @@ function writeRaw(key: string, value: unknown): void {
     .run(key, JSON.stringify(value));
 }
 
+function deleteRaw(key: string): void {
+  getDb().prepare('DELETE FROM settings WHERE key = ?').run(key);
+}
+
 // ───────────────────────── 配置列表 ─────────────────────────
 
 /**
@@ -50,10 +55,22 @@ function writeRaw(key: string, value: unknown): void {
  */
 export function getProfiles(): StoredProfile[] {
   const stored = readRaw<StoredProfile[]>(PROFILES_KEY);
-  if (stored && Array.isArray(stored)) return stored;
+  if (stored && Array.isArray(stored)) {
+    let needsRewrite = false;
+    const plain = stored.map((p) => {
+      const apiKey = decryptSecret(p.apiKey);
+      // 旧版本存的是明文：读出来顺手加密写回
+      if (p.apiKey && !isEncrypted(p.apiKey)) needsRewrite = true;
+      return { ...p, apiKey };
+    });
+    if (needsRewrite) saveProfiles(plain);
+    return plain;
+  }
 
   const migrated = migrateLegacy();
-  writeRaw(PROFILES_KEY, migrated);
+  saveProfiles(migrated);
+  // 旧版单套配置（settings.text）迁移完就删，避免明文 Key 一直留在库里
+  deleteRaw('text');
   if (!getActiveProfileId() && migrated.length > 0) {
     setActiveProfileId(migrated[0]!.id);
   }
@@ -84,7 +101,10 @@ function migrateLegacy(): StoredProfile[] {
 }
 
 export function saveProfiles(list: StoredProfile[]): void {
-  writeRaw(PROFILES_KEY, list);
+  writeRaw(
+    PROFILES_KEY,
+    list.map((p) => ({ ...p, apiKey: encryptSecret(p.apiKey) })),
+  );
 }
 
 export function getProfile(id: ID): StoredProfile | null {
@@ -172,11 +192,15 @@ const DEFAULT_IMAGE: ImageProviderConfig = {
 };
 
 export function getImageConfig(): ImageProviderConfig {
-  return readRaw<ImageProviderConfig>('image') ?? DEFAULT_IMAGE;
+  const stored = readRaw<ImageProviderConfig>('image');
+  if (!stored) return DEFAULT_IMAGE;
+  const apiKey = decryptSecret(stored.apiKey);
+  if (stored.apiKey && !isEncrypted(stored.apiKey)) setImageConfig({ ...stored, apiKey });
+  return { ...stored, apiKey };
 }
 
 export function setImageConfig(cfg: ImageProviderConfig): void {
-  writeRaw('image', cfg);
+  writeRaw('image', { ...cfg, apiKey: encryptSecret(cfg.apiKey) });
 }
 
 // ───────────────────────── 联网查资料 ─────────────────────────

@@ -218,10 +218,15 @@ export async function writeRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'invalid_input', message: 'text 不能为空' });
     }
     const content = req.body?.append === false ? text : chapter.content + text;
-    const updated = updateChapter(chapter.id, {
-      content,
-      status: chapter.status === 'outline' ? 'drafting' : chapter.status,
-    });
+    const updated = updateChapter(
+      chapter.id,
+      {
+        content,
+        status: chapter.status === 'outline' ? 'drafting' : chapter.status,
+      },
+      // AI 整章替换前强制留一份原稿
+      { snapshotReason: 'ai-apply', forceSnapshot: true },
+    );
     return updated;
   });
 }

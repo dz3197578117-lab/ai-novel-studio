@@ -15,6 +15,7 @@ import {
 import { getProject, touchProject } from '../repos/projects.repo.js';
 import { archiveDeleted, archiveDeletedBatch } from '../repos/backup.js';
 import { chapterInput, volumeInput } from './schemas.js';
+import { getChapterVersion, listChapterVersions } from '../repos/versions.repo.js';
 
 export async function chapterRoutes(app: FastifyInstance): Promise<void> {
   // ── 卷 ──
@@ -103,11 +104,76 @@ export async function chapterRoutes(app: FastifyInstance): Promise<void> {
         details: parsed.error.flatten(),
       });
     }
-    const c = updateChapter(req.params.id, parsed.data);
+
+    const cur = getChapter(req.params.id);
+    if (!cur) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
+
+    /**
+     * 乐观锁：两个窗口同时开着同一章，后保存的不能静默覆盖先保存的。
+     * 前端带上打开时的 updatedAt；不一致就 409，把服务器版本一起带回去给用户选。
+     */
+    const { baseUpdatedAt, snapshotReason, ...patch } = parsed.data;
+    if (baseUpdatedAt && baseUpdatedAt !== cur.updatedAt) {
+      return reply.code(409).send({
+        error: 'conflict',
+        message: '这一章已在另一个窗口被修改，请选择覆盖或载入服务器版本。',
+        current: cur,
+      });
+    }
+
+    const c = updateChapter(req.params.id, patch, {
+      snapshotReason: snapshotReason ?? 'autosave',
+      // 手动保存 / AI 整章覆盖必须留档，不能被 5 分钟节流吞掉
+      forceSnapshot: snapshotReason === 'manual' || snapshotReason === 'ai-apply',
+    });
     if (!c) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
     touchProject(c.projectId);
     return c;
   });
+
+  // ── 版本历史 ──
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
+    '/api/chapters/:id/versions',
+    async (req, reply) => {
+      if (!getChapter(req.params.id)) {
+        return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
+      }
+      const limit = Number(req.query.limit) || 30;
+      return listChapterVersions(req.params.id, limit);
+    },
+  );
+
+  app.get<{ Params: { id: string; versionId: string } }>(
+    '/api/chapters/:id/versions/:versionId',
+    async (req, reply) => {
+      const version = getChapterVersion(req.params.versionId, req.params.id);
+      if (!version) return reply.code(404).send({ error: 'not_found', message: '版本不存在' });
+      return version;
+    },
+  );
+
+  /** 恢复到某个历史版本；当前内容会先自动留一份，恢复本身也可撤销 */
+  app.post<{ Params: { id: string; versionId: string } }>(
+    '/api/chapters/:id/versions/:versionId/restore',
+    async (req, reply) => {
+      const version = getChapterVersion(req.params.versionId, req.params.id);
+      if (!version) return reply.code(404).send({ error: 'not_found', message: '版本不存在' });
+
+      const restored = updateChapter(
+        req.params.id,
+        {
+          title: version.title,
+          content: version.content,
+          outline: version.outline,
+          beats: version.beats,
+        },
+        { snapshotReason: 'restore', forceSnapshot: true },
+      );
+      if (!restored) return reply.code(404).send({ error: 'not_found', message: '章节不存在' });
+      touchProject(restored.projectId);
+      return restored;
+    },
+  );
 
   app.delete<{ Params: { id: string } }>('/api/chapters/:id', async (req, reply) => {
     const chapter = getChapter(req.params.id);

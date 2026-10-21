@@ -4,27 +4,30 @@ build/
 *.log
 .DS_Store
 
-# 本地数据（数据库 / 用户上传 / 生成的图片 / API Key 配置）
+# 鏈湴鏁版嵁锛堟暟鎹簱 / 鐢ㄦ埛涓婁紶 / 鐢熸垚鐨勫浘鐗� / API Key 閰嶇疆锛�
 data/
 apps/server/data/
 apps/web/dist/
 
-# 本地环境变量
+# 鏈湴鐜鍙橀噺
 .env
 .env.local
 
-# ����Ŀ�޹ص���ʷ�ļ�
+# 与项目无关的历史文件
 .old-files/
 
-# ������ʱ�ļ�
+# 本地临时文件
 repo-url.txt
 *.log
 
 
-# �������ɵĽ�ͼ
+# 测试生成的截图
 e2e-*.png
 
-# exe 构建产物
+# exe 鏋勫缓浜х墿
 build-exe/
 NovelForge-*.zip
 build-exe-cache/
+
+# 本地密钥文件（API Key 加密用）
+.novelforge-key

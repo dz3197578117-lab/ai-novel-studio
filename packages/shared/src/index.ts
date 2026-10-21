@@ -146,6 +146,27 @@ export interface Chapter extends Timestamped {
   pov?: NarrativePov | null;
 }
 
+// ─────────────────────────── 版本历史 ───────────────────────────
+
+/** 章节快照的列表项：不带完整正文，避免一次拉几百份全文 */
+export interface ChapterVersionSummary {
+  id: ID;
+  chapterId: ID;
+  title: string;
+  wordCount: number;
+  /** autosave / manual / ai-apply / restore / outline */
+  reason: string;
+  /** 正文开头一小段，列表里用来辨认 */
+  excerpt: string;
+  createdAt: string;
+}
+
+export interface ChapterVersion extends ChapterVersionSummary {
+  content: string;
+  outline: string;
+  beats: string;
+}
+
 // ─────────────────────────── AI 配置与生成 ───────────────────────────
 
 export interface AiProviderConfig {

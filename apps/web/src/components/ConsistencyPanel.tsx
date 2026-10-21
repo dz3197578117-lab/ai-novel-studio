@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ConsistencyIssue,
   ConsistencyReport,
@@ -16,6 +16,30 @@ type Tab = 'rules' | 'brainstorm' | 'foreshadow' | 'timeline' | 'knowledge' | 't
 interface TocPlan {
   volumes: { title: string; summary: string }[];
   chapters: { volumeIndex: number; title: string; outline: string }[];
+  failedBatches?: number;
+}
+
+interface VolumePlan {
+  volumeTitle: string;
+  volumeSummary: string;
+  chapters: { title: string; outline: string }[];
+  failedBatches?: number;
+}
+
+interface OutlineResult {
+  filled: number;
+  failed: string[];
+}
+
+type JobStatus = 'running' | 'done' | 'error' | 'canceled' | 'interrupted';
+
+interface JobResp<T> {
+  id: string;
+  kind: string;
+  status: JobStatus;
+  progress: { done: number; total: number; phase: string; note?: string };
+  result?: T;
+  error?: string;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -75,12 +99,14 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const [tocTitlesOnly, setTocTitlesOnly] = useState(true);
   const [fillBusy, setFillBusy] = useState(false);
   const [fillJob, setFillJob] = useState<{ done: number; total: number } | null>(null);
+  const [fillJobId, setFillJobId] = useState<string | null>(null);
   const [tocPlan, setTocPlan] = useState<TocPlan | null>(null);
   const [tocBusy, setTocBusy] = useState(false);
   /** 后台任务进度 */
   const [tocJob, setTocJob] = useState<{ done: number; total: number; phase: string } | null>(
     null,
   );
+  const [tocJobId, setTocJobId] = useState<string | null>(null);
 
   // 按卷扩展
   const volumes = useNovel((s) => s.volumes);
@@ -90,11 +116,8 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const [exInstruction, setExInstruction] = useState('');
   const [exBusy, setExBusy] = useState(false);
   const [exJob, setExJob] = useState<{ done: number; total: number } | null>(null);
-  const [exPlan, setExPlan] = useState<{
-    volumeTitle: string;
-    volumeSummary: string;
-    chapters: { title: string; outline: string }[];
-  } | null>(null);
+  const [exJobId, setExJobId] = useState<string | null>(null);
+  const [exPlan, setExPlan] = useState<VolumePlan | null>(null);
 
   // 新增表单
   const [fsTitle, setFsTitle] = useState('');
@@ -107,6 +130,8 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   const [tlChapter, setTlChapter] = useState('');
 
   const [report, setReport] = useState<ConsistencyReport | null>(null);
+  /** 每个项目每次打开只恢复一次，避免 apply 后 selectProject 又把旧预览拉回来 */
+  const restoredProjectRef = useRef<string | null>(null);
 
   const chapterTitle = useMemo(() => {
     const map = new Map<string, string>();
@@ -140,6 +165,35 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     setHits([]);
     void load();
   }, [open, load]);
+
+  // 重开面板时把最近一次任务的已生成结果捡回来（job 落库，关页面/重启都不丢）
+  useEffect(() => {
+    if (!open || !project) {
+      if (!open) restoredProjectRef.current = null;
+      return;
+    }
+    const projectId = project.id;
+    if (restoredProjectRef.current === projectId) return;
+    restoredProjectRef.current = projectId;
+    let alive = true;
+    void (async () => {
+      try {
+        const jobs = await api.get<JobResp<TocPlan | VolumePlan>[]>(
+          `/api/projects/${projectId}/jobs?limit=20`,
+        );
+        if (!alive) return;
+        const toc = jobs.find((j) => j.kind === 'toc' && j.result);
+        if (toc?.result) setTocPlan((prev) => prev ?? (toc.result as TocPlan));
+        const vol = jobs.find((j) => j.kind === 'volume' && j.result);
+        if (vol?.result) setExPlan((prev) => prev ?? (vol.result as VolumePlan));
+      } catch {
+        /* 老数据/接口不可用时不影响面板其它功能 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, project]);
 
   if (!project) return null;
 
@@ -221,10 +275,34 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     e.target.value = '';
   }
 
+  /** 统一轮询：running 继续等，done/error/canceled/interrupted 都返回 */
+  async function waitJob<T>(
+    jobId: string,
+    onTick: (job: JobResp<T>) => void,
+  ): Promise<JobResp<T>> {
+    for (let i = 0; i < 3600; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const job = await api.get<JobResp<T>>(`/api/jobs/${jobId}`);
+      onTick(job);
+      if (job.status !== 'running') return job;
+    }
+    throw new Error('生成超时，请重试');
+  }
+
+  async function cancelJob(id: string | null) {
+    if (!id) return;
+    try {
+      await api.post(`/api/jobs/${id}/cancel`);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   async function genToc() {
     setTocBusy(true);
     setTocPlan(null);
     setTocJob(null);
+    setTocJobId(null);
     try {
       const started = await api.post<{ jobId: string; batches: number }>(
         `/api/projects/${project!.id}/generate-toc`,
@@ -234,31 +312,38 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
           titlesOnly: tocTitlesOnly,
         },
       );
+      setTocJobId(started.jobId);
 
       // 后台任务：轮询进度，1000 章可能要跑几十分钟
-      type JobResp = {
-        status: 'running' | 'done' | 'error';
-        progress: { done: number; total: number; phase: string };
-        result?: TocPlan;
-        error?: string;
-      };
-      let job: JobResp | null = null;
-      for (let i = 0; i < 3600; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        job = await api.get<JobResp>(`/api/jobs/${started.jobId}`);
-        setTocJob(job.progress);
-        if (job.status === 'done') break;
-        if (job.status === 'error') throw new Error(job.error || '生成失败');
+      const job = await waitJob<TocPlan>(started.jobId, (j) => setTocJob(j.progress));
+
+      // 失败/取消/重启也可能有部分结果：先展示，别让用户白等
+      if (job.result) setTocPlan(job.result);
+
+      if (job.status === 'canceled') {
+        setError(
+          job.result
+            ? `已取消，保留已生成的 ${job.result.chapters.length} 章`
+            : '已取消',
+        );
+      } else if (job.status === 'error' || job.status === 'interrupted') {
+        if (!job.result) throw new Error(job.error || '生成失败');
+        setError(
+          `${job.status === 'interrupted' ? '任务中断' : '部分批次失败'}，已保留 ${
+            job.result.chapters.length
+          } 章${job.error ? `：${job.error}` : ''}`,
+        );
+      } else if (job.result?.failedBatches) {
+        setError(
+          `有 ${job.result.failedBatches} 批失败，已生成 ${job.result.chapters.length} 章`,
+        );
       }
-      if (!job || job.status !== 'done' || !job.result) {
-        throw new Error('生成超时，请重试');
-      }
-      setTocPlan(job.result);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setTocBusy(false);
       setTocJob(null);
+      setTocJobId(null);
     }
   }
 
@@ -266,36 +351,35 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
   async function fillOutlines() {
     setFillBusy(true);
     setFillJob(null);
+    setFillJobId(null);
     try {
       const started = await api.post<{ jobId: string; chapterCount: number; batches: number }>(
         `/api/projects/${project!.id}/fill-outlines`,
         { onlyMissing: true },
       );
-      type JobResp = {
-        status: 'running' | 'done' | 'error';
-        progress: { done: number; total: number };
-        result?: { filled: number; failed: string[] };
-        error?: string;
-      };
-      let job: JobResp | null = null;
-      for (let i = 0; i < 3600; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        job = await api.get<JobResp>(`/api/jobs/${started.jobId}`);
-        setFillJob(job.progress);
-        if (job.status === 'done') break;
-        if (job.status === 'error') throw new Error(job.error || '补全失败');
-      }
-      if (!job || job.status !== 'done' || !job.result) throw new Error('补全超时，请重试');
+      setFillJobId(started.jobId);
+
+      const job = await waitJob<OutlineResult>(started.jobId, (j) => setFillJob(j.progress));
+
+      // 即使取消/中断，前面批次的大纲也已经写进库了，刷新一下
       await useNovel.getState().selectProject(project!.id);
-      setError(
-        `已补全 ${job.result.filled} 章大纲` +
-          (job.result.failed.length ? `，${job.result.failed.length} 章失败` : ''),
-      );
+
+      if (job.result) {
+        setError(
+          `已补全 ${job.result.filled} 章大纲` +
+            (job.result.failed.length ? `，${job.result.failed.length} 章失败` : ''),
+        );
+      } else if (job.status === 'canceled') {
+        setError('已取消，已完成的大纲已保存');
+      } else if (job.status !== 'done') {
+        throw new Error(job.error || '补全失败');
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setFillBusy(false);
       setFillJob(null);
+      setFillJobId(null);
     }
   }
 
@@ -324,6 +408,7 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
     setExBusy(true);
     setExPlan(null);
     setExJob(null);
+    setExJobId(null);
     try {
       const started = await api.post<{ jobId: string; batches: number; volumeTitle: string }>(
         `/api/projects/${project!.id}/expand-volume`,
@@ -334,32 +419,35 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
           instruction: exInstruction.trim() || undefined,
         },
       );
+      setExJobId(started.jobId);
 
-      type JobResp = {
-        status: 'running' | 'done' | 'error';
-        progress: { done: number; total: number };
-        result?: {
-          volumeTitle: string;
-          volumeSummary: string;
-          chapters: { title: string; outline: string }[];
-        };
-        error?: string;
-      };
-      let job: JobResp | null = null;
-      for (let i = 0; i < 3600; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        job = await api.get<JobResp>(`/api/jobs/${started.jobId}`);
-        setExJob(job.progress);
-        if (job.status === 'done') break;
-        if (job.status === 'error') throw new Error(job.error || '生成失败');
+      const job = await waitJob<VolumePlan>(started.jobId, (j) => setExJob(j.progress));
+      if (job.result) setExPlan(job.result);
+
+      if (job.status === 'canceled') {
+        setError(
+          job.result
+            ? `已取消，保留已生成的 ${job.result.chapters.length} 章`
+            : '已取消',
+        );
+      } else if (job.status === 'error' || job.status === 'interrupted') {
+        if (!job.result) throw new Error(job.error || '生成失败');
+        setError(
+          `${job.status === 'interrupted' ? '任务中断' : '部分批次失败'}，已保留 ${
+            job.result.chapters.length
+          } 章${job.error ? `：${job.error}` : ''}`,
+        );
+      } else if (job.result?.failedBatches) {
+        setError(
+          `有 ${job.result.failedBatches} 批失败，已生成 ${job.result.chapters.length} 章`,
+        );
       }
-      if (!job || job.status !== 'done' || !job.result) throw new Error('生成超时，请重试');
-      setExPlan(job.result);
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setExBusy(false);
       setExJob(null);
+      setExJobId(null);
     }
   }
 
@@ -582,7 +670,12 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
                   }${tocJob.phase === 'planning' ? ' · 正在定骨架' : ''}`
                 : '已提交后台任务，等待开始…'}
               <br />
-              1000 章大约需要 30-60 分钟，可以先去忙别的，这个页面别关。
+              1000 章大约需要 30-60 分钟，可以关掉页面，任务在后台继续；重开面板会恢复已生成结果。
+              <div style={{ marginTop: 6 }}>
+                <button className="ghost" onClick={() => void cancelJob(tocJobId)}>
+                  取消任务
+                </button>
+              </div>
             </div>
           )}
 
@@ -632,6 +725,11 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
               <span className="hint" style={{ margin: 0 }}>
                 已完成 {fillJob.done}/{fillJob.total} 批
               </span>
+            )}
+            {fillBusy && (
+              <button className="ghost" onClick={() => void cancelJob(fillJobId)}>
+                取消
+              </button>
             )}
           </div>
         </div>
@@ -713,6 +811,11 @@ export function ConsistencyPanel({ open, onClose }: { open: boolean; onClose: ()
               {exJob
                 ? `正在生成本卷：已完成 ${exJob.done}/${exJob.total} 批`
                 : '已提交后台任务，等待开始…'}
+              <div style={{ marginTop: 6 }}>
+                <button className="ghost" onClick={() => void cancelJob(exJobId)}>
+                  取消任务
+                </button>
+              </div>
             </div>
           )}
 

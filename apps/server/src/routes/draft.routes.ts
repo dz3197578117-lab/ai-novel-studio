@@ -32,7 +32,7 @@ import {
 } from '../ai/draft.js';
 import { buildInterviewPrompt, parseInterviewResponse } from '../ai/interview.js';
 import { AiError, complete, completeAccumulated, loadTextConfig } from '../ai/client.js';
-import { createJob, getJob, patchJob, runJob } from '../services/jobs.js';
+import { cancelJob, createJob, getJob, listJobs, patchJob, runJob } from '../services/jobs.js';
 import { buildSettingBrief } from '../ai/briefing.js';
 import { transaction } from '../db.js';
 import { createProject, getProject } from '../repos/projects.repo.js';
@@ -85,59 +85,131 @@ function volumeIndexForChapter(index: number, total: number, volumeCount: number
   return Math.max(0, Math.min(volumeCount - 1, idx));
 }
 
+/** 可取消的等待 */
+function sleepAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(done, ms);
+    function done() {
+      cleanup();
+      resolve();
+    }
+    function onAbort() {
+      clearTimeout(t);
+      cleanup();
+      const e = new Error('任务已取消');
+      e.name = 'AbortError';
+      reject(e);
+    }
+    function cleanup() {
+      signal?.removeEventListener('abort', onAbort);
+    }
+    if (signal?.aborted) return onAbort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const e = new Error('任务已取消');
+  e.name = 'AbortError';
+  throw e;
+}
+
+/** 外部取消信号 + 单次调用超时，二者任一触发都会中断请求 */
+function callSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function isAbort(e: unknown, signal?: AbortSignal): boolean {
+  return Boolean(signal?.aborted) || (e as Error)?.name === 'AbortError';
+}
+
+/**
+ * 批次级重试：429/5xx/超时/格式错都值得再试一次。
+ * 401/403/400 是配置或参数问题，重试只会白烧额度。
+ */
+async function retryOnce<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    throwIfAborted(signal);
+    try {
+      return await fn();
+    } catch (e) {
+      if (isAbort(e, signal)) throw e;
+      const status = (e as { status?: number }).status;
+      if (status && status < 500 && status !== 429) throw e;
+      lastError = e;
+      if (attempt === 0) await sleepAbort(1200, signal);
+    }
+  }
+  throw lastError;
+}
+
+type DraftWithFailures = NovelDraft & { failedBatches: number };
+
 /** 章节数不多时：一次调用出完整方案 */
 async function generateSingle(
   config: AiProviderConfig,
   req: { idea: string; genre?: string; chapterCount: number },
   chapterCount: number,
+  signal?: AbortSignal,
 ): Promise<NovelDraft> {
   const prompt = buildDraftPrompt({ ...req, chapterCount });
-  // 用流式累加，避免长时间非流式请求被服务商掐断
-  const content = await completeAccumulated(
-    config,
-    [
-      { role: 'system', content: prompt.system },
-      { role: 'user', content: prompt.user },
-    ],
-    { maxTokens: draftBudget(config), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
-  );
-
   try {
-    return parseDraft(content);
+    return await retryOnce(async () => {
+      // 用流式累加，避免长时间非流式请求被服务商掐断
+      const content = await completeAccumulated(
+        config,
+        [
+          { role: 'system', content: prompt.system },
+          { role: 'user', content: prompt.user },
+        ],
+        { maxTokens: draftBudget(config), signal: callSignal(signal, DRAFT_CALL_TIMEOUT_MS) },
+      );
+      return parseDraft(content);
+    }, signal);
   } catch (e) {
-    throw new AiError(
-      `${(e as Error).message}（如果反复失败，把规划章数调小一些再试）`,
-    );
+    if (isAbort(e, signal)) throw e;
+    throw new AiError(`${(e as Error).message}（如果反复失败，把规划章数调小一些再试）`);
   }
 }
 
 /**
  * 章节数较多时：先出骨架，再分批写章节大纲。
  * 单次输出装不下 100 章，分批是唯一稳妥的办法。
+ *
+ * 单批失败不再杀死整个任务：重试一次，仍失败就记一笔、继续下一批。
+ * 每批完成都通过 onPartial 回传，调用方可以落库，用户能拿到部分结果。
  */
 async function generateChunked(
   config: AiProviderConfig,
   req: { idea: string; genre?: string; chapterCount: number },
   chapterCount: number,
   onProgress?: (done: number, total: number, phase: string) => void,
-  opts: { titlesOnly?: boolean } = {},
-): Promise<NovelDraft> {
+  opts: { titlesOnly?: boolean; signal?: AbortSignal; onPartial?: (d: DraftWithFailures) => void } = {},
+): Promise<DraftWithFailures> {
   const budget = draftBudget(config);
   const titlesOnly = Boolean(opts.titlesOnly);
+  const signal = opts.signal;
   // 只要标题时输出短得多，一批可以写更多章
   const batchSize = titlesOnly ? 50 : CHAPTER_BATCH_SIZE;
   const batchTotal = Math.ceil(chapterCount / batchSize);
 
-  // 1. 骨架
+  // 1. 骨架（失败整体就没法继续，重试一次）
   const skPrompt = buildSkeletonPrompt({ ...req, chapterCount });
   onProgress?.(0, batchTotal, 'planning');
-  const skContent = await completeAccumulated(
-    config,
-    [
-      { role: 'system', content: skPrompt.system },
-      { role: 'user', content: skPrompt.user },
-    ],
-    { maxTokens: budget, signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
+  const skContent = await retryOnce(
+    () =>
+      completeAccumulated(
+        config,
+        [
+          { role: 'system', content: skPrompt.system },
+          { role: 'user', content: skPrompt.user },
+        ],
+        { maxTokens: budget, signal: callSignal(signal, DRAFT_CALL_TIMEOUT_MS) },
+      ),
+    signal,
   );
   const skeleton = parseSkeleton(skContent);
 
@@ -152,8 +224,10 @@ async function generateChunked(
 
   // 2. 分批写章节
   const chapters: DraftChapter[] = [];
+  let failedBatches = 0;
 
   for (let start = 0, batch = 1; start < chapterCount; start += batchSize, batch++) {
+    throwIfAborted(signal);
     const count = Math.min(batchSize, chapterCount - start);
     const volumeIndexFor = Array.from({ length: count }, (_, i) =>
       volumeIndexForChapter(start + i, chapterCount, skeleton.volumes.length),
@@ -182,44 +256,62 @@ async function generateChunked(
           previousTitles: chapters.map((c) => c.title),
         });
 
-    const batchContent = await completeAccumulated(
-      config,
-      [
-        { role: 'system', content: prompt.system },
-        { role: 'user', content: prompt.user },
-      ],
-      { maxTokens: budget, signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
-    );
-
-    let got: DraftChapter[];
-    try {
-      got = titlesOnly
-        ? parseTitleBatch(batchContent, skeleton.volumes.length)
-        : parseChapterBatch(batchContent, skeleton.volumes.length);
-    } catch (e) {
-      throw new AiError(
-        `第 ${batch}/${batchTotal} 批章节生成失败（${(e as Error).message}）。` +
-          '可以重试，或把规划章数调小一些。',
-      );
+    let got: DraftChapter[] | null = null;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      throwIfAborted(signal);
+      try {
+        const batchContent = await completeAccumulated(
+          config,
+          [
+            { role: 'system', content: prompt.system },
+            { role: 'user', content: prompt.user },
+          ],
+          { maxTokens: budget, signal: callSignal(signal, DRAFT_CALL_TIMEOUT_MS) },
+        );
+        got = titlesOnly
+          ? parseTitleBatch(batchContent, skeleton.volumes.length)
+          : parseChapterBatch(batchContent, skeleton.volumes.length);
+        break;
+      } catch (e) {
+        if (isAbort(e, signal)) throw e;
+        lastError = e as Error;
+        if (attempt === 0) await sleepAbort(1200, signal);
+      }
     }
-    chapters.push(
-      ...got.slice(0, count).map((c, i) => ({
-        ...c,
-        // 模型每批会从「第1章」重新数，这里统一成全书连续编号
-        title: renumberChapterTitle(c.title, start + i),
-      })),
-    );
+
+    if (!got) {
+      failedBatches += 1;
+      console.warn(
+        `[toc] 第 ${batch}/${batchTotal} 批失败，跳过：${lastError?.message ?? '未知错误'}`,
+      );
+      onProgress?.(batch, batchTotal, 'failed');
+    } else {
+      chapters.push(
+        ...got.slice(0, count).map((c, i) => ({
+          ...c,
+          // 模型每批会从「第1章」重新数，这里统一成全书连续编号
+          title: renumberChapterTitle(c.title, start + i),
+        })),
+      );
+      onProgress?.(batch, batchTotal, 'chapters');
+    }
+
+    // 每批都回传，调用方可以立刻落库，失败/取消也不丢
+    opts.onPartial?.({ ...skeleton, chapters, failedBatches });
 
     // 批次之间稍等一下，别把服务商的每分钟额度打满
     if (start + batchSize < chapterCount) {
-      await sleep(BATCH_DELAY_MS);
+      await sleepAbort(BATCH_DELAY_MS, signal);
     }
-    onProgress?.(batch, batchTotal, 'chapters');
   }
 
-  return { ...skeleton, chapters };
-}
+  if (chapters.length === 0 && failedBatches > 0) {
+    throw new AiError('所有批次的章节都生成失败。可以重试，或把规划章数调小一些。');
+  }
 
+  return { ...skeleton, chapters, failedBatches };
+}
 
 export async function draftRoutes(app: FastifyInstance): Promise<void> {
   /**
@@ -420,25 +512,50 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     const titlesOnly = Boolean(parsed.data.titlesOnly);
     const perBatch = titlesOnly ? 50 : CHAPTER_BATCH_SIZE;
     const batchTotal = Math.max(1, Math.ceil(chapterCount / perBatch));
-    const job = createJob<{ volumes: DraftVolume[]; chapters: DraftChapter[] }>('toc', {
-      phase: 'planning',
-      done: 0,
-      total: batchTotal,
-      note: titlesOnly ? `只生成 ${chapterCount} 个章节名` : `计划生成 ${chapterCount} 章`,
-    });
+    const job = createJob<{
+      volumes: DraftVolume[];
+      chapters: DraftChapter[];
+      failedBatches: number;
+    }>(
+      'toc',
+      {
+        phase: 'planning',
+        done: 0,
+        total: batchTotal,
+        note: titlesOnly ? `只生成 ${chapterCount} 个章节名` : `计划生成 ${chapterCount} 章`,
+      },
+      project.id,
+    );
 
-    runJob(job, async () => {
-      const draft =
-        !titlesOnly && chapterCount <= SINGLE_CALL_MAX_CHAPTERS
-          ? await generateSingle(config, request, chapterCount)
-          : await generateChunked(
-              config,
-              request,
-              chapterCount,
-              (done, total, phase) => patchJob(job.id, { progress: { done, total, phase } }),
-              { titlesOnly },
-            );
-      return { volumes: draft.volumes, chapters: draft.chapters };
+    runJob(job, async (signal) => {
+      if (!titlesOnly && chapterCount <= SINGLE_CALL_MAX_CHAPTERS) {
+        const draft = await generateSingle(config, request, chapterCount, signal);
+        const result = { volumes: draft.volumes, chapters: draft.chapters, failedBatches: 0 };
+        // 单次生成也要先落库，之后前端轮询/页面重开都能拿到
+        patchJob(job.id, { result });
+        return result;
+      }
+
+      const draft = await generateChunked(
+        config,
+        request,
+        chapterCount,
+        (done, total, phase) => patchJob(job.id, { progress: { done, total, phase } }),
+        {
+          titlesOnly,
+          signal,
+          // 每批完成就落库：后续批次失败/用户取消，前面生成的不丢
+          onPartial: (d) =>
+            patchJob(job.id, {
+              result: {
+                volumes: d.volumes,
+                chapters: d.chapters,
+                failedBatches: d.failedBatches,
+              },
+            }),
+        },
+      );
+      return { volumes: draft.volumes, chapters: draft.chapters, failedBatches: draft.failedBatches };
     });
 
     return reply.code(202).send({
@@ -510,18 +627,28 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       .filter(Boolean)
       .join('\n');
 
-    const job = createJob<
-      { volumeTitle: string; volumeSummary: string; chapters: { title: string; outline: string }[] }
-    >('volume', {
-      phase: 'chapters',
-      done: 0,
-      total: batchTotal,
-      note: `${volumeTitle} · 第 ${startNumber} 章起，共 ${count} 章${titlesOnly ? '（仅章节名）' : ''}`,
-    });
+    const job = createJob<{
+      volumeTitle: string;
+      volumeSummary: string;
+      chapters: { title: string; outline: string }[];
+      failedBatches: number;
+    }>(
+      'volume',
+      {
+        phase: 'chapters',
+        done: 0,
+        total: batchTotal,
+        note: `${volumeTitle} · 第 ${startNumber} 章起，共 ${count} 章${titlesOnly ? '（仅章节名）' : ''}`,
+      },
+      project.id,
+    );
 
-    runJob(job, async () => {
+    runJob(job, async (signal) => {
       const chapters: { title: string; outline: string }[] = [];
+      let failedBatches = 0;
+
       for (let batch = 0; batch < batchTotal; batch++) {
+        throwIfAborted(signal);
         const batchStart = startNumber + batch * batchSize;
         const batchCount = Math.min(batchSize, count - batch * batchSize);
 
@@ -551,33 +678,58 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
               instruction: parsed.data.instruction,
             });
 
-        const content = await completeAccumulated(
-          config,
-          [
-            { role: 'system', content: prompt.system },
-            { role: 'user', content: prompt.user },
-          ],
-          { maxTokens: draftBudget(config), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
-        );
+        let got: { title: string; outline: string }[] | null = null;
+        let lastError: Error | null = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          throwIfAborted(signal);
+          try {
+            const content = await completeAccumulated(
+              config,
+              [
+                { role: 'system', content: prompt.system },
+                { role: 'user', content: prompt.user },
+              ],
+              { maxTokens: draftBudget(config), signal: callSignal(signal, DRAFT_CALL_TIMEOUT_MS) },
+            );
+            const parsedBatch = titlesOnly
+              ? parseTitleBatch(content, 1).map((c) => ({ title: c.title, outline: '' }))
+              : parseVolumeChapters(content);
+            got = parsedBatch.slice(0, batchCount);
+            break;
+          } catch (e) {
+            if (isAbort(e, signal)) throw e;
+            lastError = e as Error;
+            if (attempt === 0) await sleepAbort(1200, signal);
+          }
+        }
 
-        const parsedBatch = titlesOnly
-          ? parseTitleBatch(content, 1).map((c) => ({ title: c.title, outline: '' }))
-          : parseVolumeChapters(content);
-        const got = parsedBatch.slice(0, batchCount);
-        got.forEach((c, i) =>
-          chapters.push({
-            // 模型可能每批从「第1章」重数，这里统一成全书连续编号
-            title: renumberChapterTitle(c.title, batchStart - 1 + i),
-            outline: c.outline,
-          }),
-        );
+        if (!got) {
+          failedBatches += 1;
+          console.warn(
+            `[volume] 第 ${batch + 1}/${batchTotal} 批失败，跳过：${lastError?.message ?? '未知错误'}`,
+          );
+        } else {
+          got.forEach((c, i) =>
+            chapters.push({
+              // 模型可能每批从「第1章」重数，这里统一成全书连续编号
+              title: renumberChapterTitle(c.title, batchStart - 1 + i),
+              outline: c.outline,
+            }),
+          );
+        }
 
+        // 每批落库：失败/取消时前面生成的部分仍可预览并写入
         patchJob(job.id, {
           progress: { done: batch + 1, total: batchTotal, phase: 'chapters' },
+          result: { volumeTitle, volumeSummary, chapters, failedBatches },
         });
-        if (batch + 1 < batchTotal) await sleep(BATCH_DELAY_MS);
+        if (batch + 1 < batchTotal) await sleepAbort(BATCH_DELAY_MS, signal);
       }
-      return { volumeTitle, volumeSummary, chapters };
+
+      if (chapters.length === 0 && failedBatches > 0) {
+        throw new AiError('本卷所有批次的章节都生成失败，请稍后重试。');
+      }
+      return { volumeTitle, volumeSummary, chapters, failedBatches };
     });
 
     return reply.code(202).send({
@@ -683,12 +835,16 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
 
     const batchSize = 10;
     const batchTotal = Math.ceil(targets.length / batchSize);
-    const job = createJob('outlines', {
-      phase: 'chapters',
-      done: 0,
-      total: batchTotal,
-      note: `补 ${targets.length} 章大纲`,
-    });
+    const job = createJob<{ filled: number; failed: string[] }>(
+      'outlines',
+      {
+        phase: 'chapters',
+        done: 0,
+        total: batchTotal,
+        note: `补 ${targets.length} 章大纲`,
+      },
+      project.id,
+    );
 
     const idea = [
       `书名：${project.title}`,
@@ -699,11 +855,13 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
       .filter(Boolean)
       .join('\n');
 
-    runJob(job, async () => {
+    runJob(job, async (signal) => {
       let done = 0;
       const failed: string[] = [];
       const settingBrief = buildSettingBrief(project.id);
+
       for (let i = 0; i < targets.length; i += batchSize) {
+        throwIfAborted(signal);
         const batch = targets.slice(i, i + batchSize);
         const prompt = buildOutlineFillPrompt({
           projectTitle: project.title,
@@ -723,21 +881,39 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
             .join('\n'),
         });
 
-        const content = await completeAccumulated(
-          config,
-          [
-            { role: 'system', content: prompt.system },
-            { role: 'user', content: prompt.user },
-          ],
-          { maxTokens: Math.max(config.maxTokens || 0, 4096), signal: AbortSignal.timeout(DRAFT_CALL_TIMEOUT_MS) },
-        );
+        let outlines: string[] | null = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          throwIfAborted(signal);
+          try {
+            const content = await completeAccumulated(
+              config,
+              [
+                { role: 'system', content: prompt.system },
+                { role: 'user', content: prompt.user },
+              ],
+              {
+                maxTokens: Math.max(config.maxTokens || 0, 4096),
+                signal: callSignal(signal, DRAFT_CALL_TIMEOUT_MS),
+              },
+            );
+            outlines = parseOutlineFill(content);
+            break;
+          } catch (e) {
+            if (isAbort(e, signal)) throw e;
+            if (attempt === 0) await sleepAbort(1200, signal);
+          }
+        }
 
-        const outlines = parseOutlineFill(content);
-        batch.forEach((c, idx) => {
-          const outline = outlines[idx];
-          if (outline) updateChapter(c.id, { outline });
-          else failed.push(c.title);
-        });
+        if (!outlines) {
+          // 这一批整批记失败，继续下一批，不能因为一批把剩下几百章停掉
+          failed.push(...batch.map((c) => c.title));
+        } else {
+          batch.forEach((c, idx) => {
+            const outline = outlines![idx];
+            if (outline) updateChapter(c.id, { outline });
+            else failed.push(c.title);
+          });
+        }
 
         done += 1;
         patchJob(job.id, {
@@ -747,8 +923,10 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
             phase: 'chapters',
             note: failed.length ? `${failed.length} 章未成功` : undefined,
           },
+          // 每批回传，取消/重启后前端仍知道补了多少
+          result: { filled: targets.length - failed.length, failed: [...failed] },
         });
-        if (i + batchSize < targets.length) await sleep(BATCH_DELAY_MS);
+        if (i + batchSize < targets.length) await sleepAbort(BATCH_DELAY_MS, signal);
       }
       return { filled: targets.length - failed.length, failed };
     });
@@ -832,6 +1010,28 @@ export async function draftRoutes(app: FastifyInstance): Promise<void> {
     if (!job) return reply.code(404).send({ error: 'not_found', message: '任务不存在或已过期' });
     return job;
   });
+
+  /**
+   * 取消任务。已生成的部分保留在 result 里，前端仍可预览并写入。
+   * 关闭页面不会自动取消——长任务可能是有意跑着的；是否停止由用户点。
+   */
+  app.post<{ Params: { id: string } }>('/api/jobs/:id/cancel', async (req, reply) => {
+    const job = cancelJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: 'not_found', message: '任务不存在或已过期' });
+    return job;
+  });
+
+  /** 某个作品最近的任务，页面重开后据此恢复「上次生成到哪了」 */
+  app.get<{ Params: { id: string }; Querystring: { kind?: string; limit?: string } }>(
+    '/api/projects/:id/jobs',
+    async (req, reply) => {
+      if (!getProject(req.params.id)) {
+        return reply.code(404).send({ error: 'not_found', message: '项目不存在' });
+      }
+      const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 10));
+      return listJobs(req.params.id, req.query.kind, limit);
+    },
+  );
 
   /** 把预览确认后的目录写入现有作品（追加，不删除已有章节） */
   app.post<{ Params: { id: string } }>('/api/projects/:id/apply-toc', async (req, reply) => {

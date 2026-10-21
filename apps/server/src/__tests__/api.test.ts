@@ -1219,3 +1219,106 @@ describe('未配置模型时的写作接口', () => {
     assert.equal(res.statusCode, 412);
   });
 });
+
+// ───────────── P0：多标签冲突、版本恢复、Key 加密 ─────────────
+
+describe('章节编辑的乐观锁与版本历史', () => {
+  test('旧 updatedAt 保存返回 409，不覆盖服务器版本', async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '冲突测试' })).body);
+    const c = JSON.parse(
+      (await post(`/api/projects/${p.id}/chapters`, { title: '第一章' })).body,
+    );
+    const first = await patch(`/api/chapters/${c.id}`, {
+      content: '服务器上的版本',
+      baseUpdatedAt: c.updatedAt,
+      snapshotReason: 'manual',
+    });
+    assert.equal(first.statusCode, 200);
+    const afterFirst = JSON.parse(first.body);
+
+    const stale = await patch(`/api/chapters/${c.id}`, {
+      content: '另一个窗口的旧内容',
+      baseUpdatedAt: c.updatedAt,
+    });
+    assert.equal(stale.statusCode, 409);
+    const conflict = JSON.parse(stale.body);
+    assert.equal(conflict.error, 'conflict');
+    assert.equal(conflict.current.content, '服务器上的版本');
+
+    const still = JSON.parse((await get(`/api/chapters/${c.id}`)).body);
+    assert.equal(still.content, '服务器上的版本');
+
+    const retry = await patch(`/api/chapters/${c.id}`, {
+      content: '确认覆盖后的内容',
+      baseUpdatedAt: afterFirst.updatedAt,
+    });
+    assert.equal(retry.statusCode, 200);
+  });
+
+  test('可以列出历史版本并恢复', async () => {
+    const p = JSON.parse((await post('/api/projects', { title: '版本测试' })).body);
+    const c = JSON.parse(
+      (await post(`/api/projects/${p.id}/chapters`, { title: '第一章' })).body,
+    );
+
+    await patch(`/api/chapters/${c.id}`, {
+      content: '第一版正文',
+      baseUpdatedAt: c.updatedAt,
+      snapshotReason: 'manual',
+    });
+    const latest = JSON.parse((await get(`/api/chapters/${c.id}`)).body);
+    await patch(`/api/chapters/${c.id}`, {
+      content: '第二版正文',
+      baseUpdatedAt: latest.updatedAt,
+      snapshotReason: 'manual',
+    });
+
+    const list = JSON.parse((await get(`/api/chapters/${c.id}/versions`)).body);
+    assert.ok(list.length >= 1, '应有历史版本');
+
+    let target = null;
+    for (const v of list) {
+      const full = JSON.parse(
+        (await get(`/api/chapters/${c.id}/versions/${v.id}`)).body,
+      );
+      if (full.content === '第一版正文') {
+        target = full;
+        break;
+      }
+    }
+    assert.ok(target, '应能找到第一版');
+
+    const restored = await post(
+      `/api/chapters/${c.id}/versions/${target.id}/restore`,
+    );
+    assert.equal(restored.statusCode, 200);
+    assert.equal(JSON.parse(restored.body).content, '第一版正文');
+
+    const now = JSON.parse((await get(`/api/chapters/${c.id}`)).body);
+    assert.equal(now.content, '第一版正文');
+  });
+});
+
+describe('API Key 静态加密', () => {
+  test('数据库里不出现明文 Key，接口仍只返回打码值', async () => {
+    const { getDb } = await import('../db.js');
+    const plain = 'sk-test-super-secret-1234567890';
+    const res = await post('/api/profiles', {
+      name: '加密测试',
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: plain,
+      model: 'test-model',
+    });
+    assert.equal(res.statusCode, 201);
+
+    const row = getDb()
+      .prepare("SELECT value FROM settings WHERE key = 'profiles'")
+      .get() as { value: string };
+    assert.ok(!row.value.includes(plain), '数据库里不能出现明文 Key');
+    assert.ok(row.value.includes('enc:v1:'), '应为加密后的密文');
+
+    const settings = JSON.parse((await get('/api/settings')).body);
+    assert.ok(settings.profiles.some((p: { name: string }) => p.name === '加密测试'));
+    assert.ok(!JSON.stringify(settings).includes(plain), '接口不能回传明文');
+  });
+});

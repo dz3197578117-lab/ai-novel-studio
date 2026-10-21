@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNovel } from '../store/novel';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
+import { VersionHistoryDialog } from './VersionHistoryDialog';
 import type {
   Chapter,
   FactPoint,
@@ -39,6 +40,8 @@ interface EditSnapshot {
   content: string;
   outline: string;
   beats: string;
+  /** 服务器版本号：保存时带上，检测别的窗口是否改过 */
+  updatedAt: string;
   dirty: boolean;
 }
 
@@ -135,6 +138,11 @@ export function Editor() {
   const [layerBusy, setLayerBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** 409 冲突时服务器上的版本；非空会暂停自动保存 */
+  const [conflict, setConflict] = useState<Chapter | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  /** AI 整章替换后，下一次保存要强制留档 */
+  const aiSnapshotRef = useRef(false);
 
   // 写前事实核查
   const [facts, setFacts] = useState<FactPoint[]>([]);
@@ -181,6 +189,8 @@ export function Editor() {
           content: prev.content,
           outline: prev.outline,
           beats: prev.beats,
+          baseUpdatedAt: prev.updatedAt,
+          snapshotReason: 'manual',
         })
         .then(() => {
           clearLocalDraft(prev.chapterId);
@@ -201,7 +211,7 @@ export function Editor() {
       setOutline(local.outline);
       setBeats(local.beats);
       setDirty(true);
-      snapshotRef.current = { ...local, dirty: true };
+      snapshotRef.current = { ...local, updatedAt: local.updatedAt ?? chapter.updatedAt, dirty: true };
       setError('检测到上次未保存成功的本地草稿，已恢复；确认无误后按 Ctrl+S 保存');
     } else {
       setTitle(chapter.title);
@@ -215,6 +225,7 @@ export function Editor() {
         content: chapter.content,
         outline: chapter.outline,
         beats: chapter.beats ?? '',
+        updatedAt: chapter.updatedAt,
         dirty: false,
       };
     }
@@ -224,6 +235,9 @@ export function Editor() {
       .get<Scene[]>(`/api/chapters/${chapter.id}/scenes`)
       .then(setScenes)
       .catch(() => setScenes([]));
+
+    setConflict(null);
+    setHistoryOpen(false);
 
     // 纯视角覆盖，独立保存
     setPovOverride((chapter.pov ?? null) as NarrativePov | null);
@@ -262,14 +276,15 @@ export function Editor() {
 
   // 自动保存（1.2s 防抖）
   useEffect(() => {
-    if (!dirty || !chapter) return;
+    // 冲突未解决前不再自动保存，否则会每 1.2 秒撞一次 409
+    if (!dirty || !chapter || conflict) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void doSave(), 1200);
+    saveTimer.current = setTimeout(() => void doSave('autosave'), 1200);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [content, outline, title, beats]);
+  }, [content, outline, title, beats, conflict]);
 
   // 关闭/刷新页面前提醒未保存
   useEffect(() => {
@@ -288,7 +303,7 @@ export function Editor() {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        void doSave();
+        void doSave('manual');
       }
     };
     window.addEventListener('keydown', handler);
@@ -308,7 +323,8 @@ export function Editor() {
       if (mode === 'insert') {
         insertAtCursor(text);
       } else if (mode === 'replace') {
-        // 整章生成/重写：整段替换
+        // 整章生成/重写：整段替换。下一次保存强制留一份原稿
+        aiSnapshotRef.current = true;
         setContent(text);
         markEdit({ content: text });
         const el = fictionRef.current;
@@ -351,9 +367,34 @@ export function Editor() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [content]);
 
-  async function doSave() {
+  /** 把一份服务器章节同步进本地编辑状态 */
+  function applyChapter(c: Chapter) {
+    setTitle(c.title);
+    setContent(c.content);
+    setOutline(c.outline);
+    setBeats(c.beats ?? '');
+    setPovOverride((c.pov ?? null) as NarrativePov | null);
+    snapshotRef.current = {
+      chapterId: c.id,
+      title: c.title,
+      content: c.content,
+      outline: c.outline,
+      beats: c.beats ?? '',
+      updatedAt: c.updatedAt,
+      dirty: false,
+    };
+    setDirty(false);
+    clearLocalDraft(c.id);
+    void loadChapter(c.id);
+  }
+
+  async function doSave(reason: 'autosave' | 'manual' | 'ai-apply' = 'autosave') {
     if (!chapter) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // AI 整章替换后的第一次保存，强制留档，且不能被自动保存节流吞掉
+    const effectiveReason = aiSnapshotRef.current ? 'ai-apply' : reason;
+    aiSnapshotRef.current = false;
+    const baseUpdatedAt = snapshotRef.current?.updatedAt;
     setSaving(true);
     try {
       const updated = await api.patch<Chapter>(`/api/chapters/${chapter.id}`, {
@@ -361,6 +402,8 @@ export function Editor() {
         content,
         outline,
         beats,
+        baseUpdatedAt,
+        snapshotReason: effectiveReason,
       });
       if (snapshotRef.current?.chapterId === updated.id) {
         snapshotRef.current = {
@@ -369,18 +412,93 @@ export function Editor() {
           content: updated.content,
           outline: updated.outline,
           beats: updated.beats ?? '',
+          updatedAt: updated.updatedAt,
           dirty: false,
         };
       }
       setDirty(false);
+      setConflict(null);
       clearLocalDraft(chapter.id);
       await refresh();
     } catch (e) {
-      saveLocalDraft({ chapterId: chapter.id, title, content, outline, beats });
+      // 409：另一个窗口已经改过这一章。先停下自动保存，让用户选覆盖还是载入服务器版本
+      if (e instanceof ApiError && e.status === 409) {
+        const body = e.body as { current?: Chapter } | undefined;
+        if (body?.current) setConflict(body.current);
+        setDirty(true);
+        saveLocalDraft({
+          chapterId: chapter.id,
+          title,
+          content,
+          outline,
+          beats,
+          updatedAt: baseUpdatedAt ?? chapter.updatedAt,
+        });
+        return;
+      }
+      saveLocalDraft({
+        chapterId: chapter.id,
+        title,
+        content,
+        outline,
+        beats,
+        updatedAt: baseUpdatedAt ?? chapter.updatedAt,
+      });
       setError(`保存失败，内容已暂存在本地：${(e as Error).message}`);
     } finally {
       setSaving(false);
     }
+  }
+
+  /** 冲突时：用本地版本强制覆盖服务器 */
+  async function forceOverwrite() {
+    if (!chapter) return;
+    setSaving(true);
+    try {
+      const updated = await api.patch<Chapter>(`/api/chapters/${chapter.id}`, {
+        title,
+        content,
+        outline,
+        beats,
+        snapshotReason: 'manual',
+      });
+      setConflict(null);
+      snapshotRef.current = {
+        chapterId: updated.id,
+        title: updated.title,
+        content: updated.content,
+        outline: updated.outline,
+        beats: updated.beats ?? '',
+        updatedAt: updated.updatedAt,
+        dirty: false,
+      };
+      setDirty(false);
+      clearLocalDraft(updated.id);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** 冲突时：放弃本地修改，载入服务器上的版本 */
+  async function loadServerVersion() {
+    if (!chapter) return;
+    try {
+      const latest = await api.get<Chapter>(`/api/chapters/${chapter.id}`);
+      applyChapter(latest);
+      setConflict(null);
+      setError('已载入服务器版本，本地未保存的修改已放弃');
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  /** 从历史版本恢复后，同步编辑器状态 */
+  function handleRestored(c: Chapter) {
+    applyChapter(c);
+    setConflict(null);
   }
 
   /** 切换本章视角（不影响其他章节） */
@@ -609,10 +727,40 @@ export function Editor() {
         <span className="save-state" title="Ctrl+S 保存">
           {saving ? '保存中…' : dirty ? '● 未保存' : '已保存'} · {words} 字
         </span>
-        <button onClick={() => void doSave()} disabled={saving || !dirty}>
+        <button className="ghost" onClick={() => setHistoryOpen(true)} title="查看/恢复历史版本">
+          历史
+        </button>
+        <button onClick={() => void doSave('manual')} disabled={saving || !dirty}>
           保存
         </button>
       </div>
+
+      {conflict && (
+        <div
+          style={{
+            margin: '0 20px',
+            border: '1px solid var(--accent)',
+            background: 'var(--accent-soft)',
+            borderRadius: 6,
+            padding: '8px 12px',
+            fontSize: 12,
+            display: 'flex',
+            gap: 8,
+            alignItems: 'center',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            ⚠ 这一章已在另一个窗口被修改（服务器版本 {conflict.wordCount} 字）。自动保存已暂停。
+          </span>
+          <button className="ghost" onClick={() => void loadServerVersion()}>
+            载入服务器版本
+          </button>
+          <button className="primary" onClick={() => void forceOverwrite()} disabled={saving}>
+            用我的版本覆盖
+          </button>
+        </div>
+      )}
 
       <div className="editor-body">
         <div className="editor-inner">
@@ -1025,6 +1173,13 @@ export function Editor() {
           />
         </div>
       </div>
+
+      <VersionHistoryDialog
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        chapterId={chapter.id}
+        onRestored={handleRestored}
+      />
     </div>
   );
 }

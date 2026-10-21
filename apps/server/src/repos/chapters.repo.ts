@@ -1,5 +1,6 @@
 import type { Chapter, ChapterStatus, ChapterSummary, FactPoint, ID, Volume } from '@novelforge/shared';
 import { countWords, getDb, newId, nowIso } from '../db.js';
+import { snapshotChapter } from './versions.repo.js';
 
 interface VolumeRow {
   id: string;
@@ -263,21 +264,37 @@ export function createChapter(projectId: ID, input: ChapterInput): Chapter {
   return getChapter(id)!;
 }
 
-export function updateChapter(id: ID, patch: Partial<ChapterInput>): Chapter | null {
+export function updateChapter(
+  id: ID,
+  patch: Partial<ChapterInput>,
+  opts: { snapshotReason?: string; forceSnapshot?: boolean } = {},
+): Chapter | null {
   const cur = getChapter(id);
   if (!cur) return null;
   const db = getDb();
   const content = patch.content ?? cur.content;
+  const nextTitle = patch.title ?? cur.title;
+  const nextOutline = patch.outline ?? cur.outline;
+  const nextBeats = patch.beats ?? cur.beats ?? '';
+
+  const changed =
+    content !== cur.content ||
+    nextTitle !== cur.title ||
+    nextOutline !== cur.outline ||
+    nextBeats !== (cur.beats ?? '');
+  // 先留旧版本再覆盖：AI 写崩/误操作后还能从历史里找回来
+  if (changed) snapshotChapter(cur, opts.snapshotReason ?? 'autosave', opts.forceSnapshot ?? false);
+
   db.prepare(
     `UPDATE chapters SET volume_id=?, title=?, outline=?, content=?, status=?, word_count=?, beats=?, pov=?, updated_at=? WHERE id=?`,
   ).run(
     patch.volumeId === undefined ? cur.volumeId : patch.volumeId,
-    patch.title ?? cur.title,
-    patch.outline ?? cur.outline,
+    nextTitle,
+    nextOutline,
     content,
     patch.status ?? cur.status,
     countWords(content),
-    patch.beats ?? cur.beats ?? '',
+    nextBeats,
     patch.pov === undefined ? (cur.pov ?? '') : (patch.pov ?? ''),
     nowIso(),
     id,

@@ -55,6 +55,10 @@ export const chapterInput = z.object({
     .enum(['first', 'third-limited', 'third-omniscient', 'multi'])
     .nullable()
     .optional(),
+  /** 乐观锁：前端保存时带上读取时的 updatedAt；不一致返回 409 */
+  baseUpdatedAt: z.string().max(40).optional(),
+  /** 版本快照原因：手动保存/AI 覆盖时强制留档 */
+  snapshotReason: z.enum(['autosave', 'manual', 'ai-apply']).optional(),
 });
 
 /** 场景卡 */

@@ -237,6 +237,39 @@ function migrate(d: DatabaseSync): void {
     version = 7;
   }
 
+  if (version < 8) {
+    // 长任务落库（服务重启/关页面后仍能看到部分结果）+ 章节版本历史
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS job_runs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'running',
+        progress TEXT NOT NULL DEFAULT '{}',
+        result TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_job_runs_project ON job_runs(project_id, created_at);
+
+      CREATE TABLE IF NOT EXISTS chapter_versions (
+        id TEXT PRIMARY KEY,
+        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        outline TEXT NOT NULL DEFAULT '',
+        beats TEXT NOT NULL DEFAULT '',
+        word_count INTEGER NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT 'autosave',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chapter_versions ON chapter_versions(chapter_id, created_at);
+    `);
+    version = 8;
+  }
+
   d.exec(`PRAGMA user_version = ${version}`);
   d.exec('COMMIT');
   } catch (e) {

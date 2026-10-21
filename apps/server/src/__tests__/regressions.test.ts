@@ -32,6 +32,9 @@ const { addConstraints, listOpenConstraints, setConstraintStatus } = await impor
   '../repos/constraints.repo.js'
 );
 const { createDoc, searchKnowledge } = await import('../repos/layers.repo.js');
+const { cancelJob, createJob, getJob, markRunningJobsInterrupted, patchJob } = await import(
+  '../services/jobs.js'
+);
 const { profileInput } = await import('../routes/schemas.js');
 
 before(() => {
@@ -508,4 +511,38 @@ test('同一次检查里的重复约束只落一条', () => {
   ]);
   assert.equal(n, 1);
   assert.equal(listOpenConstraints(p.id).filter((c) => c.text === '主称呼前后不一致').length, 1);
+});
+
+
+// ───────────── 后台任务落库 / 取消 / 重启中断 ─────────────
+
+test('任务进度与部分结果落库，取消后保留 result', () => {
+  const p = createProject({ title: '任务落库' });
+  const job = createJob<{ done: number }>('toc', { done: 0, total: 2 }, p.id);
+  patchJob(job.id, {
+    result: { done: 1 },
+    progress: { done: 1, total: 2, phase: 'chapters' },
+  });
+
+  const row = getDb()
+    .prepare('SELECT status, result FROM job_runs WHERE id = ?')
+    .get(job.id) as { status: string; result: string };
+  assert.equal(row.status, 'running');
+  assert.deepEqual(JSON.parse(row.result), { done: 1 });
+
+  const canceled = cancelJob(job.id);
+  assert.equal(canceled?.status, 'canceled');
+  assert.deepEqual(getJob<{ done: number }>(job.id)?.result, { done: 1 });
+});
+
+test('服务重启把 running 任务标成 interrupted，部分结果不丢', () => {
+  const p = createProject({ title: '任务中断' });
+  const job = createJob<{ done: number }>('volume', { done: 0, total: 3 }, p.id);
+  patchJob(job.id, { result: { done: 2 } });
+
+  markRunningJobsInterrupted();
+
+  const after = getJob<{ done: number }>(job.id);
+  assert.equal(after?.status, 'interrupted');
+  assert.deepEqual(after?.result, { done: 2 });
 });

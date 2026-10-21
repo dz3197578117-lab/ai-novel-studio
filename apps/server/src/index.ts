@@ -19,6 +19,7 @@ import {
 } from './config.js';
 import { getDb } from './db.js';
 import { startAutoBackup } from './repos/backup.js';
+import { markRunningJobsInterrupted } from './services/jobs.js';
 import { projectRoutes } from './routes/projects.routes.js';
 import { entityRoutes } from './routes/entities.routes.js';
 import { chapterRoutes } from './routes/chapters.routes.js';
@@ -141,6 +142,8 @@ async function main() {
   }
 
   getDb();
+  // 上次没跑完的后台任务不可能自动续跑，标成 interrupted，保留已生成的部分
+  markRunningJobsInterrupted();
   // 数据库定期自动备份（有作品被误删后无从恢复的教训）
   startAutoBackup();
   const app = await buildServer();

@@ -40,13 +40,15 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
 
   if (!res.ok) {
     let message = `请求失败 (${res.status})`;
+    let body: unknown;
     try {
-      const body = (await res.json()) as { message?: string; error?: string };
-      message = body.message ?? body.error ?? message;
+      body = await res.json();
+      const b = body as { message?: string; error?: string };
+      message = b.message ?? b.error ?? message;
     } catch {
       /* 非 JSON 错误 */
     }
-    throw new ApiError(message, res.status);
+    throw new ApiError(message, res.status, body);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -56,6 +58,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** 服务端返回的原始 body（409 冲突时带 current 章节） */
+    readonly body?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
