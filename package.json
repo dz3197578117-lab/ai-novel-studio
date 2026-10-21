@@ -1,6 +1,6 @@
 {
   "name": "novelforge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "AI 长篇小说创作工作台 —— 本地 Web 应用",

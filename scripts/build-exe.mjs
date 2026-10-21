@@ -5,13 +5,15 @@
  *   node scripts/build-exe.mjs                 # Windows x64（默认）
  *   node scripts/build-exe.mjs --target linux-x64   # 本机验证用
  *
- * 产物：build-exe/NovelForge-win-x64.zip
- *   NovelForge.exe   ← 单文件服务端（内嵌打包后的 JS）
- *   web/             ← 前端静态文件
+ * 产物：NovelForge-win-x64.zip
+ *   NovelForge.exe   ← 服务端 + 前端资源，全部内嵌
  *   package.json     ← 版本号（更新检查读取）
  *   README.txt
  *
- * 注意：Node SEA 不支持把静态文件打进 exe，所以 web/ 必须与 exe 放在一起。
+ * 前端不再外置：构建时把 apps/web/dist 转成 base64 写进
+ * apps/server/src/web-assets.generated.ts，再随 esbuild 一起打进 blob，
+ * 服务端在找不到 web/ 目录时从内存提供页面。
+ * 打完包会把该文件还原成空表，保持仓库里的源码干净。
  */
 import { execFileSync, execSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -40,18 +42,56 @@ function run(cmd, args, opts = {}) {
   execFileSync(cmd, args, { cwd: root, stdio: 'inherit', ...opts });
 }
 
-function copyDir(from, to) {
-  fs.rmSync(to, { recursive: true, force: true });
-  fs.cpSync(from, to, { recursive: true });
+const ASSET_MODULE = path.join(root, 'apps/server/src/web-assets.generated.ts');
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+/**
+ * 收集前端产物。
+ * 跳过 sourcemap：既占体积，也把源码结构带出去了。
+ */
+function collectAssets(dir, base = '') {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.endsWith('.map')) continue;
+    const full = path.join(dir, entry.name);
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      out.push(...collectAssets(full, rel));
+    } else {
+      const type = MIME[path.extname(entry.name).toLowerCase()] ?? 'application/octet-stream';
+      out.push([rel, { type, base64: fs.readFileSync(full).toString('base64') }]);
+    }
+  }
+  return out;
 }
 
-/** 产物里不需要 sourcemap：既占体积，也把源码结构带出去了 */
-function stripMaps(dir) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) stripMaps(full);
-    else if (entry.name.endsWith('.map')) fs.rmSync(full, { force: true });
-  }
+/** 把前端资源写成 TS 模块，交给 esbuild 一起打进 blob */
+function writeAssetModule(assets) {
+  const body = JSON.stringify(Object.fromEntries(assets));
+  fs.writeFileSync(
+    ASSET_MODULE,
+    '// 该文件由 scripts/build-exe.mjs 在构建时生成，构建结束会自动还原，请勿手改。\n' +
+      `export const WEB_ASSETS: Record<string, { type: string; base64: string }> = ${body};\n`,
+    'utf8',
+  );
 }
 
 async function download(url, file) {
@@ -72,25 +112,33 @@ async function main() {
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(cacheDir, { recursive: true });
 
-  // 2. 前端静态文件
-  log('复制前端产物到 web/');
-  copyDir(path.join(root, 'apps/web/dist'), path.join(outDir, 'web'));
-  stripMaps(path.join(outDir, 'web'));
+  // 2. 前端资源内嵌
+  const assets = collectAssets(path.join(root, 'apps/web/dist'));
+  const rawBytes = assets.reduce((n, [, a]) => n + Math.floor((a.base64.length * 3) / 4), 0);
+  log(`内嵌前端资源：${assets.length} 个文件，约 ${(rawBytes / 1024).toFixed(0)} KB`);
+  const stub = fs.readFileSync(ASSET_MODULE, 'utf8');
+  writeAssetModule(assets);
 
   // 3. 服务端打包成单文件 CJS
-  log('打包服务端（esbuild）');
-  await build({
-    entryPoints: [path.join(root, 'apps/server/src/index.ts')],
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    target: 'node22',
-    outfile: path.join(outDir, 'server.cjs'),
-    external: ['node:sqlite'],
-    // 便携版固定生产模式：否则双击 exe 时 IS_DEV 为真，不托管前端
-    define: { 'process.env.NODE_ENV': '"production"' },
-    logLevel: 'warning',
-  });
+  try {
+    log('打包服务端（esbuild）');
+    await build({
+      entryPoints: [path.join(root, 'apps/server/src/index.ts')],
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      target: 'node22',
+      outfile: path.join(outDir, 'server.cjs'),
+      external: ['node:sqlite'],
+      // 便携版固定生产模式：否则双击 exe 时 IS_DEV 为真，不托管前端
+      define: { 'process.env.NODE_ENV': '"production"' },
+      logLevel: 'warning',
+      charset: 'utf8',
+    });
+  } finally {
+    // 无论成功失败都还原，避免把几百 KB 的 base64 留在源码里
+    fs.writeFileSync(ASSET_MODULE, stub, 'utf8');
+  }
 
   // 4. SEA blob
   log('生成 SEA blob');
@@ -166,10 +214,11 @@ async function main() {
   fs.writeFileSync(
     path.join(outDir, 'README.txt'),
     [
-      'NovelForge 便携版',
+      'NovelForge 便携版（单文件）',
       '',
       '1. 双击 NovelForge.exe 启动，浏览器会自动打开 http://127.0.0.1:8787',
-      '2. web 文件夹必须与 exe 放在同一目录，否则页面打不开',
+      '2. 只有这一个文件，不需要附带 web 文件夹；页面已内嵌在 exe 里',
+      '   想替换前端时，可在 exe 同级放一个 web 目录（会优先使用它）',
       '3. 数据默认存在 %APPDATA%\\NovelForge（数据库、图片、备份）',
       '   想放在 exe 旁边：先建一个 data 文件夹，再设环境变量 NOVELFORGE_PORTABLE=1',
       '4. 端口被占用会自动顺延到 8788、8789…，以控制台显示的地址为准',
@@ -187,14 +236,14 @@ async function main() {
   fs.rmSync(zipPath, { force: true });
   if (process.platform === 'win32') {
     execSync(
-      `powershell -NoProfile -Command "Compress-Archive -Path '${exePath}','${path.join(outDir, 'web')}','${path.join(outDir, 'package.json')}','${path.join(outDir, 'README.txt')}' -DestinationPath '${zipPath}' -Force"`,
+      `powershell -NoProfile -Command "Compress-Archive -Path '${exePath}','${path.join(outDir, 'package.json')}','${path.join(outDir, 'README.txt')}' -DestinationPath '${zipPath}' -Force"`,
       { cwd: root, stdio: 'inherit' },
     );
   } else {
-    execSync(
-      `zip -qr "${zipPath}" "${exeName}" web package.json README.txt -x "*.cache*"`,
-      { cwd: outDir, stdio: 'inherit' },
-    );
+    execSync(`zip -qr "${zipPath}" "${exeName}" package.json README.txt -x "*.cache*"`, {
+      cwd: outDir,
+      stdio: 'inherit',
+    });
   }
 
   const size = fs.statSync(zipPath).size;

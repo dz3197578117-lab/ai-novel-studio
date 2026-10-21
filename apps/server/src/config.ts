@@ -60,7 +60,8 @@ export const DATA_DIR = process.env.NOVELFORGE_DATA_DIR
 
 /**
  * 前端构建产物目录。
- * 开发：apps/web/dist；打包：exe 同级 web/。
+ * 开发：apps/web/dist；
+ * 打包：exe 同级 web/（可选）—— 不存在时使用内嵌在可执行文件里的页面。
  */
 export const WEB_DIR = process.env.NOVELFORGE_WEB_DIR
   ? path.resolve(process.env.NOVELFORGE_WEB_DIR)

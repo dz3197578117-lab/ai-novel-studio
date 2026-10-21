@@ -18,6 +18,7 @@ import {
   IS_LOCAL_BIND,
 } from './config.js';
 import { getDb } from './db.js';
+import { hasEmbeddedWeb, registerEmbeddedWeb } from './static-web.js';
 import { startAutoBackup } from './repos/backup.js';
 import { markRunningJobsInterrupted } from './services/jobs.js';
 import { reindexKnowledgeIfNeeded } from './repos/layers.repo.js';
@@ -95,21 +96,30 @@ export async function buildServer() {  const app = Fastify({
 
   app.get('/api/health', async () => ({ ok: true, dataDir: DATA_DIR }));
 
-  // 生产模式下托管前端构建产物（单进程部署）
-  const webDist = WEB_DIR;
-  if (!IS_DEV && fs.existsSync(webDist)) {
-    await app.register(fastifyStatic, {
-      root: webDist,
-      prefix: '/',
-      decorateReply: true,
-      wildcard: false,
-    });
-    app.setNotFoundHandler((req, reply) => {
-      if (req.url.startsWith('/api')) {
-        return reply.code(404).send({ error: 'not_found', message: '接口不存在' });
-      }
-      return reply.sendFile('index.html');
-    });
+  // 生产模式下托管前端（单进程部署）
+  // 磁盘优先：exe 同级放了 web/ 就用它，方便手动替换前端；
+  // 没有目录时用构建期内嵌进可执行文件的资源，保证单文件也能直接打开页面。
+  if (!IS_DEV) {
+    if (fs.existsSync(WEB_DIR)) {
+      await app.register(fastifyStatic, {
+        root: WEB_DIR,
+        prefix: '/',
+        decorateReply: true,
+        wildcard: false,
+      });
+      app.setNotFoundHandler((req, reply) => {
+        if (req.url.startsWith('/api')) {
+          return reply.code(404).send({ error: 'not_found', message: '接口不存在' });
+        }
+        return reply.sendFile('index.html');
+      });
+    } else if (hasEmbeddedWeb()) {
+      registerEmbeddedWeb(app);
+    } else {
+      console.warn(
+        `[web] 没有找到前端资源：${WEB_DIR} 不存在，可执行文件里也没有内嵌页面；只有 /api 可用。`,
+      );
+    }
   }
 
   app.setErrorHandler((err, _req, reply) => {
