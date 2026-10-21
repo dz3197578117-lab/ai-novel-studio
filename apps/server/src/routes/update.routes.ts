@@ -4,12 +4,12 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CurrentVersion, UpdateInfo } from '@novelforge/shared';
-import { SERVER_ROOT } from '../config.js';
+import { IS_PACKAGED, SERVER_ROOT } from '../config.js';
 
 const run = promisify(execFile);
 
-/** 仓库根目录：apps/server/../.. */
-const REPO_ROOT = path.resolve(SERVER_ROOT, '../..');
+/** 仓库根目录：开发时是 apps/server/../..；打包后就是 exe 同级目录（没有 git） */
+const REPO_ROOT = IS_PACKAGED ? SERVER_ROOT : path.resolve(SERVER_ROOT, '../..');
 
 /** 解析不到 origin 时的兜底 */
 const FALLBACK_REPO = 'dz3197578117-lab/ai-novel-studio';
@@ -108,7 +108,9 @@ async function collect(force: boolean): Promise<UpdateInfo> {
 
   // 没有 git 历史（压缩包安装）：无法比对，只能提示重新下载
   if (!current.commit) {
-    base.message = '当前版本是从压缩包解压安装的，无法与仓库比对提交。';
+    base.message = IS_PACKAGED
+      ? '这是便携版，不包含 git 仓库，无法自动比对；请下载新版本替换 exe。'
+      : '当前版本是从压缩包解压安装的，无法与仓库比对提交。';
     cache = { at: Date.now(), data: base };
     return base;
   }
@@ -199,6 +201,9 @@ async function collect(force: boolean): Promise<UpdateInfo> {
 
 /** 只读本地信息，不联网 */
 export async function readCurrent(): Promise<CurrentVersion> {
+  if (IS_PACKAGED) {
+    return { version: readVersion(), commit: null, date: null, branch: null, canPull: false };
+  }
   const commit = await git(['rev-parse', 'HEAD'], REPO_ROOT);
   const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], REPO_ROOT);
   const date = await git(['log', '-1', '--format=%cI'], REPO_ROOT);

@@ -3,8 +3,20 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import path from 'node:path';
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { HOST, IMAGES_DIR, IS_DEV, PORT, PORT_RETRY, DATA_DIR, ACCESS_TOKEN, IS_LOCAL_BIND } from './config.js';
+import {
+  HOST,
+  IMAGES_DIR,
+  IS_DEV,
+  IS_PACKAGED,
+  PORT,
+  PORT_RETRY,
+  DATA_DIR,
+  WEB_DIR,
+  ACCESS_TOKEN,
+  IS_LOCAL_BIND,
+} from './config.js';
 import { getDb } from './db.js';
 import { startAutoBackup } from './repos/backup.js';
 import { projectRoutes } from './routes/projects.routes.js';
@@ -24,10 +36,8 @@ import { updateRoutes } from './routes/update.routes.js';
 import { factRoutes } from './routes/facts.routes.js';
 import { constraintRoutes } from './routes/constraints.routes.js';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
 
-export async function buildServer() {
-  const app = Fastify({
+export async function buildServer() {  const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? (IS_DEV ? 'warn' : 'info'),
     },
@@ -84,7 +94,7 @@ export async function buildServer() {
   app.get('/api/health', async () => ({ ok: true, dataDir: DATA_DIR }));
 
   // 生产模式下托管前端构建产物（单进程部署）
-  const webDist = path.resolve(here, '../../web/dist');
+  const webDist = WEB_DIR;
   if (!IS_DEV && fs.existsSync(webDist)) {
     await app.register(fastifyStatic, {
       root: webDist,
@@ -160,10 +170,40 @@ async function main() {
   }
 
   console.log(`\n  NovelForge 服务已启动 → http://${HOST}:${port}\n  数据目录: ${DATA_DIR}\n`);
+
+  // 便携版双击启动时自动开浏览器；测试/服务器环境可用 NOVELFORGE_NO_OPEN=1 关掉
+  if (IS_PACKAGED) openBrowser(`http://127.0.0.1:${port}`);
 }
 
-const isEntry = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isEntry) {
+function openBrowser(url: string): void {
+  if (process.env.NOVELFORGE_NO_OPEN === '1') return;
+  try {
+    const child =
+      process.platform === 'win32'
+        ? spawn('cmd', ['/c', 'start', '', url], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+          })
+        : process.platform === 'darwin'
+          ? spawn('open', [url], { detached: true, stdio: 'ignore' })
+          : spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+    child.unref();
+  } catch {
+    /* 没有浏览器/被策略禁用：用户手动打开控制台里的地址即可 */
+  }
+}
+
+/** 开发时判断是否被直接执行；打包后 import.meta.url 不存在，交给 IS_PACKAGED 兜底 */
+function isDirectRun(): boolean {
+  try {
+    return Boolean(process.argv[1]) && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]!);
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun() || IS_PACKAGED) {
   main().catch((e) => {
     console.error(e);
     process.exit(1);

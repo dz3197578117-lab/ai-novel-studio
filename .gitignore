@@ -23,3 +23,8 @@ repo-url.txt
 
 # ╡БйтиЗЁи╣д╫ьм╪
 e2e-*.png
+
+# exe Ф·└Е╩╨Д╨╖Г┴╘
+build-exe/
+NovelForge-*.zip
+build-exe-cache/

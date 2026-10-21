@@ -27,9 +27,13 @@
     "mock:llm": "node scripts/mock-llm.mjs",
     "seed": "pnpm --filter @novelforge/server seed",
     "clean": "node scripts/clean.mjs",
-    "test:e2e:plan-apply": "node scripts/e2e-plan-apply.mjs"
+    "test:e2e:plan-apply": "node scripts/e2e-plan-apply.mjs",
+    "build:exe": "node scripts/build-exe.mjs",
+    "build:exe:linux": "node scripts/build-exe.mjs --target=linux-x64"
   },
   "devDependencies": {
+    "esbuild": "^0.25.12",
+    "postject": "1.0.0-alpha.6",
     "typescript": "^5.7.2"
   }
 }
