@@ -31,3 +31,9 @@ build-exe-cache/
 
 # 本地密钥文件（API Key 加密用）
 .novelforge-key
+
+# 桌面版构建产物
+apps/desktop/build/
+apps/desktop/dist/
+NovelForge-desktop-*.zip
+apps/desktop/package-lock.json

@@ -1,0 +1,53 @@
+{
+  "name": "novelforge-desktop",
+  "productName": "NovelForge",
+  "version": "0.1.3",
+  "private": true,
+  "description": "NovelForge 桌面版：内置本地服务与窗口，不需要浏览器",
+  "main": "main.cjs",
+  "author": "dz3197578117-lab",
+  "license": "MIT",
+  "build": {
+    "appId": "com.novelforge.desktop",
+    "productName": "NovelForge",
+    "electronVersion": "45.0.0",
+    "asar": true,
+    "directories": {
+      "output": "dist",
+      "buildResources": "resources"
+    },
+    "files": [
+      "main.cjs",
+      "build/server.cjs",
+      "resources/icon.png"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web",
+        "filter": [
+          "**/*",
+          "!**/*.map"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "icon": "resources/icon.png",
+      "category": "Office"
+    }
+  }
+}

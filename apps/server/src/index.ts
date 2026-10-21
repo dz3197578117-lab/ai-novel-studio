@@ -142,6 +142,38 @@ export async function buildServer() {  const app = Fastify({
   return app;
 }
 
+/** 启动前的一次性初始化：建库、标记中断任务、重建索引、开自动备份 */
+function bootstrap(): void {
+  getDb();
+  // 上次没跑完的后台任务不可能自动续跑，标成 interrupted，保留已生成的部分
+  markRunningJobsInterrupted();
+  // v9 之前的知识库没有重叠分块/倒排索引，启动时重建一次
+  reindexKnowledgeIfNeeded();
+  // 数据库定期自动备份（有作品被误删后无从恢复的教训）
+  startAutoBackup();
+}
+
+/**
+ * 供桌面外壳（Electron）调用：监听随机端口并返回实际地址。
+ *
+ * 用 0 端口而不是 8787：桌面版不需要固定地址，随机端口天然避开
+ * 端口冲突，也不会把内部服务暴露成一个「谁都能访问」的固定入口。
+ */
+export async function startForDesktop(): Promise<{
+  url: string;
+  close: () => Promise<void>;
+}> {
+  bootstrap();
+  const app = await buildServer();
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const addr = app.server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => app.close(),
+  };
+}
+
 async function main() {
   if (!IS_LOCAL_BIND && !ACCESS_TOKEN) {
     console.error(
@@ -152,13 +184,7 @@ async function main() {
     process.exit(1);
   }
 
-  getDb();
-  // 上次没跑完的后台任务不可能自动续跑，标成 interrupted，保留已生成的部分
-  markRunningJobsInterrupted();
-  // v9 之前的知识库没有重叠分块/倒排索引，启动时重建一次
-  reindexKnowledgeIfNeeded();
-  // 数据库定期自动备份（有作品被误删后无从恢复的教训）
-  startAutoBackup();
+  bootstrap();
   const app = await buildServer();
 
   // 端口被占用时自动顺延，避免用户机器上别的程序占着默认端口就启动失败
